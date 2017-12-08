@@ -1188,7 +1188,7 @@ class payline extends PaymentModule
                             'desc' => $this->l('Apply customization created through administration center to the payment page'),
                             'name' => 'PAYLINE_WEB_CASH_CUSTOM_CODE',
                             'label' => $this->l('Payment page customization ID'),
-                            'placeholder' => '1fd51s2dfs51',
+                            'placeholder' => '',
                         ),
                     ),
                     'submit' => array(
