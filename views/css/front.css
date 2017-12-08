@@ -1,0 +1,25 @@
+/**
+ * Payline module for PrestaShop
+ *
+ * @author    Monext <support@payline.com>
+ * @copyright Monext - http://www.payline.com
+ */
+
+#payline-payment-container p.payment_module a {
+	background: url(../img/logo.png) 15px 15px no-repeat #fbfbfb;
+	padding-left: 210px;
+}
+
+#payline-payment-container p.payment_module a:after {
+	display: block;
+	content: "\f054";
+	position: absolute;
+	right: 15px;
+	margin-top: -11px;
+	top: 50%;
+	font-family: "FontAwesome";
+	font-size: 25px;
+	height: 22px;
+	width: 14px;
+	color: #777;
+}

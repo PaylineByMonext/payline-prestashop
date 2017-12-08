@@ -1,0 +1,18 @@
+/**
+ * Payline module for PrestaShop
+ *
+ * @author    Monext <support@payline.com>
+ * @copyright Monext - http://www.payline.com
+ */
+
+#payline-contracts-list li {
+	margin-bottom: 10px;
+	border-radius: 5px;
+	cursor: move;
+}
+#payline-contracts-list li.payline-active-contract {
+	border-color: #00aff0;
+}
+#payline-contracts-list li:not(.payline-active-contract) {
+	border-color: orange;
+}
