@@ -4,7 +4,7 @@
  *
  * @author    Monext <support@payline.com>
  * @copyright Monext - http://www.payline.com
- * @version   2.0.0
+ * @version   2.1.0
  */
 
 if (!defined('_PS_VERSION_')) {
@@ -12,6 +12,7 @@ if (!defined('_PS_VERSION_')) {
 }
 
 require_once(_PS_ROOT_DIR_ . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'payline' . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'autoload.php');
+require_once(_PS_ROOT_DIR_ . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'payline' . DIRECTORY_SEPARATOR . 'class' . DIRECTORY_SEPARATOR . 'PaylineToken.php');
 require_once(_PS_ROOT_DIR_ . DIRECTORY_SEPARATOR . 'modules' . DIRECTORY_SEPARATOR . 'payline' . DIRECTORY_SEPARATOR . 'class' . DIRECTORY_SEPARATOR . 'PaylinePaymentGateway.php');
 
 class payline extends PaymentModule
@@ -47,27 +48,31 @@ class payline extends PaymentModule
             'invoice' => false,
             'template' => 'payment',
         ),
-    );
-
-    /**
-     * Response code that does define the transaction approved state
-     * @var array
-     */
-    protected $approvedResponseCode = array(
-        '34230',
-        '34330',
-        '02500',
-        '02501',
-    );
-
-    /**
-     * Response code that does define the pending state
-     * @var array
-     */
-    protected $pendingResponseCode = array(
-        '02000',
-        '02005',
-        '02016',
+        'PAYLINE_ID_ORDER_STATE_NX' => array(
+            'name' => array(
+                'en' => 'Partially paid with Payline',
+                'fr' => 'Payé partiellement via Payline',
+            ),
+            'send_email' => false,
+            'color' => '#bbddee',
+            'hidden' => false,
+            'delivery' => false,
+            'logable' => true,
+            'invoice' => true,
+            'template' => 'payment',
+        ),
+        'PAYLINE_ID_STATE_ALERT_SCHEDULE' => array(
+            'name' => array(
+                'en' => 'Alert scheduler',
+                'fr' => 'Alerte échéancier',
+            ),
+            'send_email' => false,
+            'color' => '#ffcdcf',
+            'hidden' => false,
+            'delivery' => false,
+            'logable' => true,
+            'invoice' => true,
+        ),
     );
 
     // Errors constants
@@ -84,7 +89,7 @@ class payline extends PaymentModule
         $this->name = 'payline';
         $this->tab = 'payments_gateways';
         $this->module_key = '';
-        $this->version = '2.0.0';
+        $this->version = '2.1.0';
         $this->author = 'Monext';
         $this->need_instance = true;
 
@@ -104,14 +109,40 @@ class payline extends PaymentModule
     }
 
     /**
+     * Create Payline-related tables
+     * @since 2.1.0
+     * @return bool
+     */
+    protected function createTables()
+    {
+        $res = Db::getInstance()->execute('
+        CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.'payline_token` (
+            `id_order` int(10) UNSIGNED NOT NULL,
+            `id_cart` int(10) UNSIGNED NOT NULL,
+            `token` VARCHAR(255) NOT NULL,
+            UNIQUE `id_order` (`id_order`),
+            UNIQUE `id_cart` (`id_cart`)
+        ) ENGINE='._MYSQL_ENGINE_.' CHARSET=utf8');
+
+        return $res;
+    }
+
+    /**
      * Create custom order state
      * @since 2.0.0
      * @return bool
      */
-    public function createCustomOrderState()
+    protected function createCustomOrderState()
     {
         foreach ($this->customOrderStateList as $configurationKey => $customOrderState) {
             $idOrderState = Configuration::get($configurationKey);
+            if (!empty($idOrderState)) {
+                // Check if order state needs update...
+                $orderState = new OrderState($idOrderState);
+                if (!Validate::isLoadedObject($orderState)) {
+                    $idOrderState = false;
+                }
+            }
             if (empty($idOrderState)) {
                 // Order state has to be created
                 $orderState = new OrderState($idOrderState);
@@ -141,6 +172,27 @@ class payline extends PaymentModule
                     }
                 } else {
                     return false;
+                }
+            } else {
+                // Update order state if needed
+                $orderState = new OrderState($idOrderState);
+                if (Validate::isLoadedObject($orderState)) {
+                    $dirty = false;
+                    foreach ($customOrderState as $k => $v) {
+                        if ($k != 'name' && $k != 'color') {
+                            if ($orderState->{$k} != $v) {
+                                $dirty = true;
+                                $orderState->{$k} = $v;
+                            }
+                        }
+                    }
+                    if ($dirty) {
+                        try {
+                            $orderState->save();
+                        } catch (Exception $e) {
+                            PrestaShopLogger::addLog('payline::createCustomOrderState - Cannot save Order State', 3, null, 'OrderState', $idOrderState);
+                        }
+                    }
                 }
             }
         }
@@ -174,6 +226,7 @@ class payline extends PaymentModule
             || !$this->registerHook('displayBackOfficeHeader')
             || !$this->registerHook('displayHeader')
             || !$this->registerHook('displayAdminOrderLeft')
+            || !$this->registerHook('actionAdminOrdersListingResultsModifier')
             || !$this->registerHook('actionObjectOrderSlipAddAfter')
             || !$this->registerHook('actionOrderStatusUpdate')
             || (version_compare(_PS_VERSION_, '1.7.0.0', '<') && !$this->registerHook('displayPayment'))
@@ -181,6 +234,8 @@ class payline extends PaymentModule
             || !$this->registerHook('paymentOptions')
             // Install custom order state
             || !$this->createCustomOrderState()
+            // Install tables
+            || !$this->createTables()
         ) {
             return false;
         }
@@ -270,7 +325,7 @@ class payline extends PaymentModule
     {
         // Check if transaction ID is the same
         $idTransaction = null;
-        $orderPayments = OrderPayment::getByOrderId($order->id);
+        $orderPayments = OrderPayment::getByOrderReference($order->reference);
         if (sizeof($orderPayments)) {
             // Retrieve transaction ID
             $paylineTransaction = current($orderPayments);
@@ -316,7 +371,7 @@ class payline extends PaymentModule
                         OrderSlip::create($order, $orderSlipDetailsList, null);
                     }
 
-                    $this->addOrderPayment($order, $amountToRefund * -1, null, $refund['transaction']['id'], null, null, $orderInvoice);
+                    $this->addOrderPaymentAfterRefund($order, $amountToRefund * -1, null, $refund['transaction']['id'], null, null, $orderInvoice);
 
                     // Wait 1s because Payline API may take some time to be updated after a refund
                     sleep(1);
@@ -409,6 +464,57 @@ class payline extends PaymentModule
 
     /**
      * Display payment result on confirmation page
+     * @since 2.1.0
+     * @param array $params
+     * @return void
+     */
+    public function hookActionAdminOrdersListingResultsModifier($params)
+    {
+        $idOrderStateNx = (int)Configuration::get('PAYLINE_ID_ORDER_STATE_NX');
+        if (!empty($idOrderStateNx) && !empty($params['list']) && is_array($params['list'])) {
+            foreach ($params['list'] as $orderListRow) {
+                $idOrderList[] = (int)$orderListRow['id_order'];
+            }
+            // Get id_order list with the right order state
+            $idOrderWaitingList = array();
+            $idOrderWaitingListResult = Db::getInstance()->executeS('SELECT `id_order` FROM `'._DB_PREFIX_.'orders` WHERE `current_state`=' . (int)$idOrderStateNx . ' AND `id_shop` IN ('.implode(', ', Shop::getContextListShopID()).')');
+            if (is_array($idOrderWaitingListResult)) {
+                foreach ($idOrderWaitingListResult as $row) {
+                    $idOrderWaitingList[] = (int)$row['id_order'];
+                }
+            }
+
+            foreach ($params['list'] as &$orderListRow) {
+                if (in_array((int)$orderListRow['id_order'], $idOrderWaitingList)) {
+                    // Retrieve info from Payline
+                    $order = new Order((int)$orderListRow['id_order']);
+                    if (Validate::isLoadedObject($order) && $order->module == 'payline') {
+                        // Retrieve original transaction via token
+                        $token = PaylineToken::getByIdOrder($order->id);
+                        if (!empty($token)) {
+                            $originalTransaction = PaylinePaymentGateway::getPaymentInformations($token);
+                            if (!empty($originalTransaction['paymentRecordId']) && !empty($originalTransaction['payment']['mode']) &&
+                                $originalTransaction['payment']['mode'] == 'NX' &&
+                                isset($originalTransaction['billingRecordList']) && is_array($originalTransaction['billingRecordList']) &&
+                                isset($originalTransaction['billingRecordList']['billingRecord']) && is_array($originalTransaction['billingRecordList']['billingRecord'])
+                            ) {
+                                $paymentRecord = PaylinePaymentGateway::getPaymentRecord($originalTransaction['payment']['contractNumber'], $originalTransaction['paymentRecordId']);
+                                if (!empty($paymentRecord['recurring'])) {
+                                    // Retrieve validated payment count
+                                    $validTransactionCount = PaylinePaymentGateway::getValidatedRecurringPayment($paymentRecord);
+                                    // Change order state name
+                                    $orderListRow['osname'] = sprintf($this->l('Scheduler %s/%s paid'), (int)$validTransactionCount, (int)$paymentRecord['recurring']['billingLeft']);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Display payment result on confirmation page
      * @since 2.0.0
      * @param array $params
      * @return string
@@ -419,10 +525,28 @@ class payline extends PaymentModule
         if (!$this->active) {
             return;
         }
+
+        $output = '';
         if (!empty($params['id_order'])) {
             $order = new Order($params['id_order']);
             if (Validate::isLoadedObject($order) && $order->module == 'payline') {
-                $orderPayments = OrderPayment::getByOrderId($order->id);
+                // Retrieve original transaction via token
+                $token = PaylineToken::getByIdOrder($order->id);
+                if (!empty($token)) {
+                    $originalTransaction = PaylinePaymentGateway::getPaymentInformations($token);
+                    if (!empty($originalTransaction['payment']['mode']) && $originalTransaction['payment']['mode'] == 'NX') {
+                        if (isset($originalTransaction['billingRecordList']) && is_array($originalTransaction['billingRecordList']) && isset($originalTransaction['billingRecordList']['billingRecord']) && is_array($originalTransaction['billingRecordList']['billingRecord'])) {
+                            // Display all records
+                            $this->context->smarty->assign(array(
+                                'id_order' => (int)$params['id_order'],
+                                'billingList' => $originalTransaction['billingRecordList']['billingRecord'],
+                                'paymentRecordId' => $originalTransaction['paymentRecordId'],
+                            ));
+                        }
+                    }
+                }
+                // Retrieve order payments
+                $orderPayments = OrderPayment::getByOrderReference($order->reference);
                 $sameTransactionID = false;
                 $transactionsList = array();
                 foreach ($orderPayments as $orderPayment) {
@@ -451,12 +575,14 @@ class payline extends PaymentModule
                     'allowReset' => $allowReset,
                 ));
                 if (version_compare(_PS_VERSION_, '1.7.0.0', '>=')) {
-                    return $this->context->smarty->fetch($this->local_path.'views/templates/hook/admin_order.tpl');
+                    $output .= $this->context->smarty->fetch($this->local_path.'views/templates/hook/admin_order.tpl');
                 } else {
-                    return $this->display(__FILE__, 'admin_order.tpl');
+                    $output .= $this->display(__FILE__, 'admin_order.tpl');
                 }
             }
         }
+
+        return $output;
     }
 
     /**
@@ -472,7 +598,7 @@ class payline extends PaymentModule
             $idTransaction = null;
             $order = new Order((int)$params['id_order']);
             if (Validate::isLoadedObject($order)) {
-                $orderPayments = OrderPayment::getByOrderId($order->id);
+                $orderPayments = OrderPayment::getByOrderReference($order->reference);
                 if (sizeof($orderPayments)) {
                     // Retrieve transaction ID
                     $paylineTransaction = current($orderPayments);
@@ -509,7 +635,7 @@ class payline extends PaymentModule
             && $amountToRefund > 0
             && !Tools::getValue('generateDiscount') && !Tools::getValue('generateDiscountRefund')) {
             $idTransaction = null;
-            $orderPayments = OrderPayment::getByOrderId($order->id);
+            $orderPayments = OrderPayment::getByOrderReference($order->reference);
             if (sizeof($orderPayments)) {
                 // Retrieve transaction ID
                 $paylineTransaction = current($orderPayments);
@@ -526,7 +652,7 @@ class payline extends PaymentModule
                             $orderInvoice = null;
                         }
 
-                        $this->addOrderPayment($order, $amountToRefund * -1, null, $refund['transaction']['id'], null, null, $orderInvoice);
+                        $this->addOrderPaymentAfterRefund($order, $amountToRefund * -1, null, $refund['transaction']['id'], null, null, $orderInvoice);
 
                         // Wait 1s because Payline API may take some time to be updated after a refund
                         sleep(1);
@@ -567,7 +693,7 @@ class payline extends PaymentModule
         // $state = $order->getCurrentState();
 
         $idTransaction = null;
-        $orderPayments = OrderPayment::getByOrderId($order->id);
+        $orderPayments = OrderPayment::getByOrderReference($order->reference);
         if (sizeof($orderPayments)) {
             // Retrieve transaction ID
             $paylineTransaction = current($orderPayments);
@@ -597,6 +723,7 @@ class payline extends PaymentModule
 
         $paymentMethodList = array();
 
+        // Web payment
         if (Configuration::get('PAYLINE_WEB_CASH_ENABLE')) {
             $uxMode = Configuration::get('PAYLINE_WEB_CASH_UX');
 
@@ -604,7 +731,7 @@ class payline extends PaymentModule
             $webCash->setModuleName($this->name)->setCallToActionText($this->l('Pay by Payline'));
 
             if ($uxMode == 'lightbox') {
-                $paymentRequest = PaylinePaymentGateway::createPaymentRequest($this->context);
+                list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::WEB_PAYMENT_METHOD);
                 if (!empty($paymentRequest['token'])) {
                     $this->smarty->assign(array(
                         'payline_token' => $paymentRequest['token'],
@@ -617,7 +744,7 @@ class payline extends PaymentModule
                     $webCash = null;
                 }
             } elseif ($uxMode == 'redirect') {
-                $paymentRequest = PaylinePaymentGateway::createPaymentRequest($this->context);
+                list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::WEB_PAYMENT_METHOD);
                 if (!empty($paymentRequest['redirectURL'])) {
                     $webCash->setAction($paymentRequest['redirectURL']);
                 } else {
@@ -629,6 +756,54 @@ class payline extends PaymentModule
 
             if ($webCash !== null) {
                 $paymentMethodList[] = $webCash;
+            }
+        }
+
+        // Recurring payment
+        if (Configuration::get('PAYLINE_RECURRING_ENABLE') && (!Configuration::get('PAYLINE_RECURRING_TRIGGER') || ($this->context->cart->getOrderTotal() > Configuration::get('PAYLINE_RECURRING_TRIGGER')))) {
+            $uxMode = Configuration::get('PAYLINE_RECURRING_UX');
+
+            $recurringPayment = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
+            $callToActionText = $this->l('Pay by Payline');
+            $recurringTitle = Configuration::get('PAYLINE_RECURRING_TITLE', $this->context->language->id);
+            $recurringSubTitle = Configuration::get('PAYLINE_RECURRING_SUBTITLE', $this->context->language->id);
+            if (strlen($recurringTitle)) {
+                $callToActionText .= ' - ' . $recurringTitle;
+            }
+            $recurringPayment->setModuleName($this->name)->setCallToActionText($callToActionText);
+            // Add additionnal information text
+            if (strlen($recurringSubTitle)) {
+                $recurringPayment->setAdditionalInformation($recurringSubTitle);
+            }
+
+            if ($uxMode == 'lightbox') {
+                list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::RECURRING_PAYMENT_METHOD);
+                if (!empty($paymentRequest['token'])) {
+                    $this->smarty->assign(array(
+                        'payline_token' => $paymentRequest['token'],
+                        'payline_ux_mode' => Configuration::get('PAYLINE_RECURRING_UX'),
+                        'payline_assets' => PaylinePaymentGateway::getAssetsToRegister(),
+                        'payline_title' => $recurringTitle,
+                        'payline_subtitle' => $recurringSubTitle,
+                    ));
+                    $recurringPayment->setAction('javascript:Payline.Api.init()');
+                    $recurringPayment->setAdditionalInformation($this->fetch('module:payline/views/templates/front/1.7/lightbox.tpl'));
+                } else {
+                    $recurringPayment = null;
+                }
+            } elseif ($uxMode == 'redirect') {
+                list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::RECURRING_PAYMENT_METHOD);
+                if (!empty($paymentRequest['redirectURL'])) {
+                    $recurringPayment->setAction($paymentRequest['redirectURL']);
+                } else {
+                    $recurringPayment = null;
+                }
+            } else {
+                $recurringPayment->setAction($this->context->link->getModuleLink($this->name, 'payment_nx', array(), true));
+            }
+
+            if ($recurringPayment !== null) {
+                $paymentMethodList[] = $recurringPayment;
             }
         }
 
@@ -661,7 +836,7 @@ class payline extends PaymentModule
             ));
 
             if ($uxMode == 'lightbox') {
-                $paymentRequest = PaylinePaymentGateway::createPaymentRequest($this->context);
+                list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::WEB_PAYMENT_METHOD);
                 if (!empty($paymentRequest['token'])) {
                     $this->smarty->assign(array(
                         'payline_token' => $paymentRequest['token'],
@@ -672,7 +847,7 @@ class payline extends PaymentModule
                     $paymentReturn .= $this->display(__FILE__, 'views/templates/hook/payment.tpl');
                 }
             } elseif ($uxMode == 'redirect') {
-                $paymentRequest = PaylinePaymentGateway::createPaymentRequest($this->context);
+                list($paymentRequest, $paymentRequestParams)= PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::WEB_PAYMENT_METHOD);
                 if (!empty($paymentRequest['redirectURL'])) {
                     $this->smarty->assign(array(
                         'payline_token' => $paymentRequest['token'],
@@ -690,15 +865,56 @@ class payline extends PaymentModule
             }
         }
 
+        // Recurring payment
+        if (Configuration::get('PAYLINE_RECURRING_ENABLE') && (!Configuration::get('PAYLINE_RECURRING_TRIGGER') || ($this->context->cart->getOrderTotal() > Configuration::get('PAYLINE_RECURRING_TRIGGER')))) {
+            $uxMode = Configuration::get('PAYLINE_RECURRING_UX');
+            $recurringTitle = Configuration::get('PAYLINE_RECURRING_TITLE', $this->context->language->id);
+            $recurringSubTitle = Configuration::get('PAYLINE_RECURRING_SUBTITLE', $this->context->language->id);
+
+            $this->smarty->assign(array(
+                'payline_ux_mode' => $uxMode,
+                'payline_title' => $recurringTitle,
+                'payline_subtitle' => $recurringSubTitle,
+            ));
+
+            if ($uxMode == 'lightbox') {
+                list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::RECURRING_PAYMENT_METHOD);
+                if (!empty($paymentRequest['token'])) {
+                    $this->smarty->assign(array(
+                        'payline_token' => $paymentRequest['token'],
+                        'payline_assets' => PaylinePaymentGateway::getAssetsToRegister(),
+                    ));
+                    $paymentReturn .= $this->display(__FILE__, 'views/templates/hook/payment_nx.tpl');
+                }
+            } elseif ($uxMode == 'redirect') {
+                list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::RECURRING_PAYMENT_METHOD);
+                if (!empty($paymentRequest['redirectURL'])) {
+                    $this->smarty->assign(array(
+                        'payline_token' => $paymentRequest['token'],
+                        'payline_href' => $paymentRequest['redirectURL'],
+                    ));
+
+                    $paymentReturn .= $this->display(__FILE__, 'views/templates/hook/payment_nx.tpl');
+                }
+            } else {
+                $this->smarty->assign(array(
+                    'payline_href' => $this->context->link->getModuleLink($this->name, 'payment_nx', array(), true),
+                ));
+
+                $paymentReturn .= $this->display(__FILE__, 'views/templates/hook/payment_nx.tpl');
+            }
+        }
+
         return $paymentReturn;
     }
 
     /**
      * Check if the payment is available
      * @since 2.0.0
+     * @param int $paymentMethod
      * @return bool
      */
-    public function isPaymentAvailable()
+    public function isPaymentAvailable($paymentMethod = null)
     {
         if (!$this->active) {
             return;
@@ -708,7 +924,15 @@ class payline extends PaymentModule
             return false;
         }
         // Check if at least one payment method is available
-        if (!Configuration::get('PAYLINE_WEB_CASH_ENABLE')) {
+        if ($paymentMethod == null && !Configuration::get('PAYLINE_WEB_CASH_ENABLE') && !Configuration::get('PAYLINE_RECURRING_ENABLE')) {
+            return false;
+        }
+        // Check if web payment method is available
+        if ($paymentMethod == PaylinePaymentGateway::WEB_PAYMENT_METHOD && !Configuration::get('PAYLINE_WEB_CASH_ENABLE')) {
+            return false;
+        }
+        // Check if recurring payment method is available
+        if ($paymentMethod == PaylinePaymentGateway::RECURRING_PAYMENT_METHOD && !Configuration::get('PAYLINE_RECURRING_ENABLE')) {
             return false;
         }
         // Check if current cart currency is allowed
@@ -726,7 +950,7 @@ class payline extends PaymentModule
      * @param Cart $cart
      * @return bool
      */
-    public function checkAllowedCurrency(Cart $cart)
+    protected function checkAllowedCurrency(Cart $cart)
     {
         $currency_order = new Currency((int)($cart->id_currency));
         $currencies_module = $this->getCurrency((int)$cart->id_currency);
@@ -739,31 +963,6 @@ class payline extends PaymentModule
             }
         }
         return false;
-    }
-
-    /**
-     * Check if module is up to date
-     * @since 2.0.0
-     * @param bool $updateDb
-     * @param bool $displayConfirm
-     * @return bool
-     */
-    public function checkIfModuleIsUpdate($updateDb = false, $displayConfirm = true)
-    {
-        if (!$updateDb && $this->version != Configuration::get('PAYLINE_LAST_VERSION')) {
-            return false;
-        }
-
-        if ($updateDb) {
-            Configuration::updateValue('PAYLINE_LAST_VERSION', $this->version);
-            // Specific code for module
-
-            // End - Specific code for module
-            if ($displayConfirm) {
-                $this->context->controller->confirmations[] = $this->l('Module updated successfully');
-            }
-        }
-        return true;
     }
 
     /**
@@ -814,18 +1013,6 @@ class payline extends PaymentModule
         }
         $this->context->smarty->assign('module_dir', $this->_path);
 
-        // Is the module up to date ?
-        // if (Tools::getValue('makeUpdate')) {
-        //     $this->checkIfModuleIsUpdate(true);
-        // }
-        // if (!$this->checkIfModuleIsUpdate(false)) {
-        //     $this->context->smarty->assign(array(
-        //         'base_config_url' => $this->context->link->getAdminLink('AdminModules') . '&configure=' . $this->name,
-        //     ));
-
-        //     return $this->display($this->getLocalPath(), 'views/templates/admin/core/new_version_available.tpl');
-        // }
-
         // If values have been submitted in the form, process.
         $this->postProcess();
 
@@ -863,14 +1050,24 @@ class payline extends PaymentModule
             $activeTab = 'web-payment';
             if (Tools::isSubmit('submitPaylineweb-payment')) {
                 $activeTab = 'web-payment';
+            } elseif (Tools::isSubmit('submitPaylinerecurring-web-payment')) {
+                $activeTab = 'recurring-web-payment';
             } elseif (Tools::isSubmit('submitPaylinepayline')) {
                 $activeTab = 'payline';
             } elseif (Tools::isSubmit('submitPaylinecontracts')) {
                 $activeTab = 'contracts';
             }
 
+            // Add alert if notification URL is empty or invalid
+            $pointOfSale = PaylinePaymentGateway::getPointOfSale($currentPos);
+            $notificationUrl = $this->context->link->getModuleLink('payline', 'notification', array(), true);
+            if (empty($pointOfSale['notificationURL']) || trim($pointOfSale['notificationURL']) != trim($notificationUrl)) {
+                $this->context->controller->warnings[] = sprintf($this->l('You must define the notification URL into your point of sale configuration, the current value is empty or invalid. %s The correct URL is: %s %s %s'), '<br />', '<strong>', $notificationUrl, '</strong>');
+                $this->context->controller->warnings[] = $this->l('When editing the URL, please be sure to check all the checkbox below the text input too.');
+            }
+
             // Add alert if all contracts are disabled
-            $paylineCheckNoEnabledContract = (Configuration::get('PAYLINE_WEB_CASH_ENABLE') && !sizeof(PaylinePaymentGateway::getEnabledContracts()));
+            $paylineCheckNoEnabledContract = ((Configuration::get('PAYLINE_WEB_CASH_ENABLE') || Configuration::get('PAYLINE_RECURRING_ENABLE')) && !sizeof(PaylinePaymentGateway::getEnabledContracts()));
             if ($paylineCheckNoEnabledContract) {
                 $this->context->controller->warnings[] = $this->l('You must enable at least one contract.');
                 $activeTab = 'contracts';
@@ -883,6 +1080,7 @@ class payline extends PaymentModule
 
         $this->context->smarty->assign('payline_credentials_configuration', $this->renderForm('payline'));
         $this->context->smarty->assign('payline_web_payment_configuration', $this->renderForm('web-payment'));
+        $this->context->smarty->assign('payline_recurring_payment_configuration', $this->renderForm('recurring-web-payment'));
         $this->context->smarty->assign('payline_contracts_configuration', $this->renderForm('contracts'));
         return $this->context->smarty->fetch($this->local_path.'views/templates/admin/configure.tpl');
     }
@@ -921,9 +1119,10 @@ class payline extends PaymentModule
      * Retrieve values for <select> items into HelperForm
      * @since 2.0.0
      * @param string $listName
+     * @param int $paymentMethod
      * @return array
      */
-    protected function getConfigSelectList($listName)
+    protected function getConfigSelectList($listName, $paymentMethod = null)
     {
         if ($listName == 'payment-action') {
             return array(
@@ -937,29 +1136,42 @@ class payline extends PaymentModule
                 ),
             );
         } elseif ($listName == 'user-experience') {
-            return array(
-                array(
+            $ux = array(
+                0 => array(
                     'value' => 'tab',
                     'name' => $this->l('in-shop tab'),
                 ),
-                array(
+                1 => array(
                     'value' => 'column',
                     'name' => $this->l('in-shop column'),
                 ),
-                array(
-                    'value' => 'lightbox',
-                    'name' => $this->l('lightbox'),
-                ),
-                array(
+                4 => array(
                     'value' => 'redirect',
                     'name' => $this->l('Redirect to payment page'),
                 ),
             );
+
+            // Only allow lightbox UX mode once
+            $lightboxExperienceAlreadyEnabled = false;
+            if ($paymentMethod == PaylinePaymentGateway::WEB_PAYMENT_METHOD) {
+                $lightboxExperienceAlreadyEnabled = (Configuration::get('PAYLINE_RECURRING_UX') == 'lightbox');
+            } elseif ($paymentMethod == PaylinePaymentGateway::RECURRING_PAYMENT_METHOD) {
+                $lightboxExperienceAlreadyEnabled = (Configuration::get('PAYLINE_WEB_CASH_UX') == 'lightbox');
+            }
+            if (!$lightboxExperienceAlreadyEnabled) {
+                $ux[3] = array(
+                    'value' => 'lightbox',
+                    'name' => $this->l('lightbox'),
+                );
+            }
+
+            ksort($ux);
+            return $ux;
         } elseif ($listName == 'order-states') {
             $orderStatusListForSelect = array();
             foreach (OrderState::getOrderStates($this->context->language->id) as $os) {
                 // Ignore order states related to a specific module or error/refund/waiting to be paid states
-                if (!empty($os['module_name']) || in_array((int)$os['id_order_state'], array(_PS_OS_ERROR_, _PS_OS_REFUND_, (int)Configuration::get('PAYLINE_ID_STATE_AUTOR'), (int)Configuration::get('PAYLINE_ID_STATE_PENDING')))) {
+                if (!empty($os['module_name']) || in_array((int)$os['id_order_state'], array(_PS_OS_ERROR_, _PS_OS_REFUND_, (int)Configuration::get('PAYLINE_ID_STATE_AUTOR'), (int)Configuration::get('PAYLINE_ID_STATE_PENDING'), (int)Configuration::get('PAYLINE_ID_ORDER_STATE_NX'), (int)Configuration::get('PAYLINE_ID_STATE_ALERT_SCHEDULE')))) {
                     continue;
                 }
                 $orderStatusListForSelect[] = array(
@@ -996,6 +1208,38 @@ class payline extends PaymentModule
             }
 
             return $contractsListForSelect;
+        } elseif ($listName == 'recurring-periods') {
+            $recurrinPeriods = array();
+            for ($period = 2; $period <= 99; $period++) {
+                $recurrinPeriods[] = array(
+                    'value' => $period,
+                    'name' => $period,
+                );
+            }
+
+            return $recurrinPeriods;
+        } elseif ($listName == 'recurring-frequency') {
+            return array(
+                array('value' => '10', 'name' => $this->l('Daily')),
+                array('value' => '20', 'name' => $this->l('Weekly')),
+                array('value' => '30', 'name' => $this->l('Bimonthly')),
+                array('value' => '40', 'name' => $this->l('Monthly')),
+                array('value' => '50', 'name' => $this->l('Two quaterly')),
+                array('value' => '60', 'name' => $this->l('Quaterly')),
+                array('value' => '70', 'name' => $this->l('Semiannual')),
+                array('value' => '80', 'name' => $this->l('Annual')),
+                array('value' => '90', 'name' => $this->l('Biannual')),
+            );
+        } elseif ($listName == 'recurring-first-period-weight') {
+            $periodWeight = array();
+            for ($weight = 0; $weight <= 70; $weight+=5) {
+                $periodWeight[] = array(
+                    'value' => $weight,
+                    'name' => $weight . ' %',
+                );
+            }
+
+            return $periodWeight;
         }
     }
 
@@ -1085,7 +1329,7 @@ class payline extends PaymentModule
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_HOST',
                             'label' => $this->l('Host'),
-                            'placeholder' => '',
+                            'placeholder' => '127.128.129.130',
                         ),
                         array(
                             'type' => 'text',
@@ -1093,21 +1337,21 @@ class payline extends PaymentModule
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_PORT',
                             'label' => $this->l('Port'),
-                            'placeholder' => '',
+                            'placeholder' => '8080',
                         ),
                         array(
                             'type' => 'text',
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_LOGIN',
                             'label' => $this->l('Login'),
-                            'placeholder' => '',
+                            'placeholder' => 'proxy-login',
                         ),
                         array(
                             'type' => 'text',
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_PASSWORD',
                             'label' => $this->l('Password'),
-                            'placeholder' => '',
+                            'placeholder' => 'proxy-password',
                         ),
                     ),
                     'submit' => array(
@@ -1172,21 +1416,172 @@ class payline extends PaymentModule
                             ),
                         ),
                         array(
+                            'type' => 'switch',
+                            'label' => $this->l('Payment by wallet'),
+                            'name' => 'PAYLINE_WEB_CASH_BY_WALLET',
+                            'is_bool' => true,
+                            'values' => array(
+                                array(
+                                    'id' => 'active_on',
+                                    'value' => true,
+                                    'label' => $this->l('Enabled'),
+                                ),
+                                array(
+                                    'id' => 'active_off',
+                                    'value' => false,
+                                    'label' => $this->l('Disabled'),
+                                )
+                            ),
+                        ),
+                        array(
                             'type' => 'select',
                             'desc' => $this->l('Redirect customer to secure payment page or display secure form in the checkout'),
                             'name' => 'PAYLINE_WEB_CASH_UX',
                             'label' => $this->l('User experience'),
                             'options' => array(
-                                'query' => $this->getConfigSelectList('user-experience'),
+                                'query' => $this->getConfigSelectList('user-experience', PaylinePaymentGateway::WEB_PAYMENT_METHOD),
                                 'id' => 'value',
                                 'name' => 'name',
                             ),
                         ),
                         array(
                             'form_group_class' => 'payline-redirect-only' . (Configuration::get('PAYLINE_WEB_CASH_UX') != 'redirect' ? ' hidden' : ''),
+                            'class' => 'fixed-width-md',
                             'type' => 'text',
                             'desc' => $this->l('Apply customization created through administration center to the payment page'),
                             'name' => 'PAYLINE_WEB_CASH_CUSTOM_CODE',
+                            'label' => $this->l('Payment page customization ID'),
+                            'placeholder' => '',
+                        ),
+                    ),
+                    'submit' => array(
+                        'title' => $this->l('Save'),
+                    ),
+                ),
+            );
+        } elseif ($tabName == 'recurring-web-payment') {
+            return array(
+                'form' => array(
+                    'legend' => array(
+                    'title' => $this->l('Recurring web payment'),
+                    'icon' => 'icon-cogs',
+                    ),
+                    'input' => array(
+                        array(
+                            'type' => 'html',
+                            'name' => '
+                            <h2>'.$this->l('Recurring payment').'</h2>
+                            <p>'.$this->l('Contracts activated through contracts configuration menu are displayed in the checkout. All payment information is filled on our secure user interface.').'</p>',
+                        ),
+                        array(
+                            'type' => 'switch',
+                            'label' => $this->l('Enable Recurring Web Payment'),
+                            'name' => 'PAYLINE_RECURRING_ENABLE',
+                            'is_bool' => true,
+                            'desc' => $this->l('choose wether to display Payline recurring payment in your checkout or not'),
+                            'values' => array(
+                                array(
+                                    'id' => 'active_on',
+                                    'value' => true,
+                                    'label' => $this->l('Enabled'),
+                                ),
+                                array(
+                                    'id' => 'active_off',
+                                    'value' => false,
+                                    'label' => $this->l('Disabled'),
+                                )
+                            ),
+                        ),
+                        array(
+                            'lang' => true,
+                            'type' => 'text',
+                            'name' => 'PAYLINE_RECURRING_TITLE',
+                            'label' => $this->l('Title'),
+                            'placeholder' => '',
+                            'maxlength' => 255,
+                        ),
+                        array(
+                            'lang' => true,
+                            'type' => 'text',
+                            'name' => 'PAYLINE_RECURRING_SUBTITLE',
+                            'label' => $this->l('Subtitle'),
+                            'placeholder' => '',
+                            'maxlength' => 255,
+                        ),
+                        array(
+                            'class' => 'fixed-width-sm',
+                            'type' => 'text',
+                            'desc' => $this->l('Amount under which payment in several times is not displayed'),
+                            'name' => 'PAYLINE_RECURRING_TRIGGER',
+                            'label' => $this->l('Minimal order total to allow recurring'),
+                            'placeholder' => '0',
+                        ),
+                        array(
+                            'type' => 'select',
+                            'name' => 'PAYLINE_RECURRING_NUMBER',
+                            'label' => $this->l('Number of payments'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('recurring-periods'),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'type' => 'select',
+                            'name' => 'PAYLINE_RECURRING_PERIODICITY',
+                            'label' => $this->l('Periodicity of payments'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('recurring-frequency'),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'type' => 'select',
+                            'desc' => $this->l('Percentage of total amount for first payment'),
+                            'name' => 'PAYLINE_RECURRING_FIRST_WEIGHT',
+                            'label' => $this->l('First payment weight'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('recurring-first-period-weight'),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'type' => 'switch',
+                            'label' => $this->l('Payment by wallet'),
+                            'name' => 'PAYLINE_RECURRING_BY_WALLET',
+                            'is_bool' => true,
+                            'values' => array(
+                                array(
+                                    'id' => 'active_on',
+                                    'value' => true,
+                                    'label' => $this->l('Enabled'),
+                                ),
+                                array(
+                                    'id' => 'active_off',
+                                    'value' => false,
+                                    'label' => $this->l('Disabled'),
+                                )
+                            ),
+                        ),
+                        array(
+                            'type' => 'select',
+                            'desc' => $this->l('Redirect customer to secure payment page or display secure form in the checkout'),
+                            'name' => 'PAYLINE_RECURRING_UX',
+                            'label' => $this->l('User experience'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('user-experience', PaylinePaymentGateway::RECURRING_PAYMENT_METHOD),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'form_group_class' => 'payline-redirect-only' . (Configuration::get('PAYLINE_RECURRING_UX') != 'redirect' ? ' hidden' : ''),
+                            'class' => 'fixed-width-md',
+                            'type' => 'text',
+                            'desc' => $this->l('Apply customization created through administration center to the payment page'),
+                            'name' => 'PAYLINE_RECURRING_CUSTOM_CODE',
                             'label' => $this->l('Payment page customization ID'),
                             'placeholder' => '',
                         ),
@@ -1258,6 +1653,24 @@ class payline extends PaymentModule
     }
 
     /**
+     * Get multilang values for a specific input
+     * @since 2.1.0
+     * @param string $configKey
+     * @return array
+     */
+    protected function getConfigLangValue($configKey)
+    {
+        $languages = Language::getLanguages(false);
+
+        $langValues = array();
+        foreach ($languages as $lang) {
+            $langValues[(int)$lang['id_lang']] = Configuration::get($configKey, (int)$lang['id_lang']);
+        }
+
+        return $langValues;
+    }
+
+    /**
      * Set values for the inputs.
      * @since 2.0.0
      * @param string $tabName
@@ -1270,8 +1683,22 @@ class payline extends PaymentModule
                 'PAYLINE_WEB_CASH_ENABLE' => Configuration::get('PAYLINE_WEB_CASH_ENABLE'),
                 'PAYLINE_WEB_CASH_ACTION' => Configuration::get('PAYLINE_WEB_CASH_ACTION'),
                 'PAYLINE_WEB_CASH_VALIDATION' => Configuration::get('PAYLINE_WEB_CASH_VALIDATION'),
+                'PAYLINE_WEB_CASH_BY_WALLET' => Configuration::get('PAYLINE_WEB_CASH_BY_WALLET'),
                 'PAYLINE_WEB_CASH_UX' => Configuration::get('PAYLINE_WEB_CASH_UX'),
                 'PAYLINE_WEB_CASH_CUSTOM_CODE' => Configuration::get('PAYLINE_WEB_CASH_CUSTOM_CODE'),
+            );
+        } elseif ($tabName == 'recurring-web-payment') {
+            return array(
+                'PAYLINE_RECURRING_ENABLE' => Configuration::get('PAYLINE_RECURRING_ENABLE'),
+                'PAYLINE_RECURRING_TITLE' => $this->getConfigLangValue('PAYLINE_RECURRING_TITLE'),
+                'PAYLINE_RECURRING_SUBTITLE' =>  $this->getConfigLangValue('PAYLINE_RECURRING_SUBTITLE'),
+                'PAYLINE_RECURRING_TRIGGER' => (float)Configuration::get('PAYLINE_RECURRING_TRIGGER'),
+                'PAYLINE_RECURRING_NUMBER' => (int)Configuration::get('PAYLINE_RECURRING_NUMBER'),
+                'PAYLINE_RECURRING_PERIODICITY' => Configuration::get('PAYLINE_RECURRING_PERIODICITY'),
+                'PAYLINE_RECURRING_FIRST_WEIGHT' => Configuration::get('PAYLINE_RECURRING_FIRST_WEIGHT'),
+                'PAYLINE_RECURRING_BY_WALLET' => Configuration::get('PAYLINE_RECURRING_BY_WALLET'),
+                'PAYLINE_RECURRING_UX' => Configuration::get('PAYLINE_RECURRING_UX'),
+                'PAYLINE_RECURRING_CUSTOM_CODE' => Configuration::get('PAYLINE_RECURRING_CUSTOM_CODE'),
             );
         } elseif ($tabName == 'payline') {
             return array(
@@ -1305,6 +1732,10 @@ class payline extends PaymentModule
             $tabName = 'web-payment';
             // Add confirmation message
             $this->context->controller->confirmations[] = $this->l('Configuration saved.');
+        } elseif (Tools::isSubmit('submitPaylinerecurring-web-payment')) {
+            $tabName = 'recurring-web-payment';
+            // Add confirmation message
+            $this->context->controller->confirmations[] = $this->l('Configuration saved.');
         } elseif (Tools::isSubmit('submitPaylinepayline')) {
             $tabName = 'payline';
         } elseif (Tools::isSubmit('submitPaylinecontracts')) {
@@ -1312,6 +1743,7 @@ class payline extends PaymentModule
         }
         if (!empty($tabName)) {
             $form_values = $this->getConfigFormValues($tabName);
+            $languages = Language::getLanguages(false);
 
             // Prevent rounding spaces into some values
             $keysToTrim = array(
@@ -1323,8 +1755,14 @@ class payline extends PaymentModule
                 'PAYLINE_PROXY_LOGIN',
                 'PAYLINE_PROXY_PASSWORD',
                 'PAYLINE_WEB_CASH_CUSTOM_CODE',
+                'PAYLINE_RECURRING_CUSTOM_CODE',
                 'PAYLINE_CONTRACTS',
                 'PAYLINE_ALT_CONTRACTS',
+            );
+            // Multilang fields
+            $multiLangFields = array(
+                'PAYLINE_RECURRING_TITLE',
+                'PAYLINE_RECURRING_SUBTITLE',
             );
             foreach (array_keys($form_values) as $key) {
                 if ($key == 'PAYLINE_CONTRACTS' || $key == 'PAYLINE_ALT_CONTRACTS') {
@@ -1337,6 +1775,11 @@ class payline extends PaymentModule
                         }
                     }
                     $newValue = Tools::jsonEncode($contractsList);
+                } elseif (in_array($key, $multiLangFields)) {
+                    $newValue = array();
+                    foreach ($languages as $lang) {
+                        $newValue[(int)$lang['id_lang']] = Tools::getValue($key . '_' . (int)$lang['id_lang']);
+                    }
                 } elseif (in_array($key, $keysToTrim)) {
                     $newValue = trim(Tools::getValue($key));
                 } else {
@@ -1364,7 +1807,7 @@ class payline extends PaymentModule
      * @param int $errorCode
      * @return string
      */
-    public function getHumanErrorCode($errorCode)
+    protected function getHumanErrorCode($errorCode)
     {
         switch ($errorCode) {
             case payline::INVALID_AMOUNT:
@@ -1378,13 +1821,13 @@ class payline extends PaymentModule
 
     /**
      * Process payment validation (customer shop return)
-     * @todo
      * @param Cart $cart
      * @param array $paymentInfos
+     * @param string $token
      * @since 2.0.0
      * @return array
      */
-    protected function createOrder(Cart $cart, $paymentInfos)
+    protected function createOrder(Cart $cart, $paymentInfos, $token)
     {
         $amountPaid = ($paymentInfos['payment']['amount'] / 100);
         // Set right order state depending on defined payment action
@@ -1418,10 +1861,37 @@ class payline extends PaymentModule
         $errorCode = null;
         $orderExists = $cart->OrderExists();
 
-        $totalCartAmount = (float)Tools::ps_round((float)$cart->getOrderTotal(true, Cart::BOTH), 2);
+        $checkAmountToPay = true;
+        $fixOrderPayment = false;
         $totalAmountPaid = Tools::ps_round((float)$amountPaid, 2);
-        if (number_format($totalCartAmount, _PS_PRICE_COMPUTE_PRECISION_) != number_format($totalAmountPaid, _PS_PRICE_COMPUTE_PRECISION_)) {
+
+        if ($paymentInfos['payment']['mode'] == 'NX') {
+            // Recurring payment
+            $nxConfiguration = PaylinePaymentGateway::getNxConfiguration(round($cart->getOrderTotal() * 100));
+            if (!$orderExists) {
+                // First amount
+                $totalAmountToPay = (float)Tools::ps_round((float)($nxConfiguration['firstAmount'] / 100), 2);
+
+                // Set order state
+                $idOrderState = (int)Configuration::get('PAYLINE_ID_ORDER_STATE_NX');
+
+                // Fake $amountPaid in order to create the order without payment error, we will fix the order payment after order creation
+                $amountPaid = $cart->getOrderTotal();
+                $fixOrderPayment = true;
+            } else {
+                // Recurrent amount
+                $totalAmountToPay = (float)Tools::ps_round((float)($nxConfiguration['amount'] / 100), 2);
+                // Do not check amount to pay
+                $checkAmountToPay = false;
+            }
+        } else {
+            // Web payment
+            $totalAmountToPay = (float)Tools::ps_round((float)$cart->getOrderTotal(true, Cart::BOTH), 2);
+        }
+
+        if ($checkAmountToPay && number_format($totalAmountToPay, _PS_PRICE_COMPUTE_PRECISION_) != number_format($totalAmountPaid, _PS_PRICE_COMPUTE_PRECISION_)) {
             // Wrong amount paid, do not create order
+            PrestaShopLogger::addLog('payline::createOrder - Wrong amount paid, we do not create order', 1, null, 'Cart', $cart->id);
 
             // We try to refund/cancel the current transaction
             // If refund can't be done, we continue the classic process. Order will be marked as invalid
@@ -1469,10 +1939,28 @@ class payline extends PaymentModule
                 );
                 if ($validateOrderResult) {
                     $order = new Order($this->currentOrder);
+                    if (Validate::isLoadedObject($order)) {
+                        // Save token for later usage
+                        PaylineToken::insert($order, $cart, $token);
+
+                        if ($fixOrderPayment) {
+                            // We need to fix the total paid real amount here
+                            $order->total_paid_real = 0;
+                            $order->save();
+                            // Remove the previous order payment
+                            $orderPayments = OrderPayment::getByOrderReference($order->reference);
+                            foreach ($orderPayments as $orderPayment) {
+                                $orderPayment->delete();
+                            }
+                            // Add the fixed order payment
+                            $this->addOrderPaymentToOrder($order, $totalAmountPaid, $paymentInfos['transaction']['id']);
+                        }
+                    }
                 }
             } catch (Exception $e) {
                 $validateOrderResult = false;
                 $errorMessage = $e->getMessage();
+                PrestaShopLogger::addLog('payline::createOrder - Failed to create order: ' . $errorMessage, 1, null, 'Cart', $cart->id);
             }
         } elseif ($cart->secure_key == $paymentInfos['formatedPrivateDataList']['secure_key']) {
             // Secure key is OK
@@ -1480,8 +1968,11 @@ class payline extends PaymentModule
             $order = new Order($idOrder);
             // Retrieve order
             if (Validate::isLoadedObject($order)) {
+                // Save token for later usage (if needed)
+                PaylineToken::insert($order, $cart, $token);
+
                 // Check if transaction ID is the same
-                $orderPayments = OrderPayment::getByOrderId($order->id);
+                $orderPayments = OrderPayment::getByOrderReference($order->reference);
                 $sameTransactionID = false;
                 foreach ($orderPayments as $orderPayment) {
                     if ($orderPayment->transaction_id == $paymentInfos['transaction']['id']) {
@@ -1489,25 +1980,24 @@ class payline extends PaymentModule
                     }
                 }
                 if (!$sameTransactionID) {
-                    // Order already exists, but it looks to be a new transaction
-                    // What should we do ?
-                    $order = null;
+                    // Order already exists, but it looks to be a new transaction - What should we do ?
+                    if ($paymentInfos['payment']['mode'] == 'NX') {
+                        // New recurring payment, add a new transaction to the current order
+                        $this->addOrderPaymentToOrder($order, $totalAmountPaid, $paymentInfos['transaction']['id']);
+                    } else {
+                        $order = null;
+                    }
                 }
             } else {
                 // Unable to retrieve order ?
-                // TODO
+                PrestaShopLogger::addLog('payline::createOrder - Unable to retrieve order', 1, null, 'Cart', $cart->id);
             }
             $validateOrderResult = true;
         } elseif ($cart->secure_key != $paymentInfos['formatedPrivateDataList']['secure_key']) {
             // Order already exists for this cart and secure key is different
             // Secure key is NOK
-            // TODO
+            PrestaShopLogger::addLog('payline::createOrder - Secure key is different', 1, null, 'Cart', $cart->id);
             $validateOrderResult = false;
-        }
-
-        if (!$validateOrderResult) {
-            // TODO redirection vers controleur + erreur
-            // Unable to create the order
         }
 
         return array($order, $validateOrderResult, $errorMessage, $errorCode);
@@ -1529,7 +2019,7 @@ class payline extends PaymentModule
             && isset($paymentInfos['formatedPrivateDataList']['id_cart'])
             && isset($paymentInfos['formatedPrivateDataList']['secure_key'])
         ) {
-            if (PaylinePaymentGateway::isValidResponse($paymentInfos, $this->approvedResponseCode) || PaylinePaymentGateway::isValidResponse($paymentInfos, $this->pendingResponseCode)) {
+            if (PaylinePaymentGateway::isValidResponse($paymentInfos, PaylinePaymentGateway::$approvedResponseCode) || PaylinePaymentGateway::isValidResponse($paymentInfos, PaylinePaymentGateway::$pendingResponseCode)) {
                 // Transaction approved or pending
 
                 // OK we can process the order via customer return
@@ -1538,7 +2028,7 @@ class payline extends PaymentModule
                 $cart = new Cart($idCart);
                 if (Validate::isLoadedObject($cart)) {
                     // Create the order
-                    list($order, $validateOrderResult, $errorMessage, $errorCode) = $this->createOrder($cart, $paymentInfos);
+                    list($order, $validateOrderResult, $errorMessage, $errorCode) = $this->createOrder($cart, $paymentInfos, $token);
 
                     if ($order instanceof Order && Validate::isLoadedObject($order)) {
                         Tools::redirect('index.php?controller=order-confirmation&id_cart='.$idCart.'&id_module='.$this->id.'&id_order='.$this->currentOrder.'&key='.$this->context->customer->secure_key);
@@ -1578,7 +2068,7 @@ class payline extends PaymentModule
         if (isset($paymentInfos['formatedPrivateDataList']) && is_array($paymentInfos['formatedPrivateDataList'])
             && isset($paymentInfos['formatedPrivateDataList']['id_cart'])
         ) {
-            if (PaylinePaymentGateway::isValidResponse($paymentInfos, $this->approvedResponseCode) || PaylinePaymentGateway::isValidResponse($paymentInfos, $this->pendingResponseCode)) {
+            if (PaylinePaymentGateway::isValidResponse($paymentInfos, PaylinePaymentGateway::$approvedResponseCode) || PaylinePaymentGateway::isValidResponse($paymentInfos, PaylinePaymentGateway::$pendingResponseCode)) {
                 // Transaction approved or pending
                 // OK we can process the order via customer return
                 $idCart = (int)$paymentInfos['formatedPrivateDataList']['id_cart'];
@@ -1592,7 +2082,7 @@ class payline extends PaymentModule
                 }
 
                 // Create the order
-                list($order, $validateOrderResult, $errorMessage) = $this->createOrder($cart, $paymentInfos);
+                list($order, $validateOrderResult, $errorMessage) = $this->createOrder($cart, $paymentInfos, $token);
             } else {
                 // Refused payment, or any other error case (customer case)
                 die(Tools::jsonEncode(array(
@@ -1609,11 +2099,257 @@ class payline extends PaymentModule
     }
 
     /**
+     * Process order update from transaction notification
+     * @param string $idTransaction
+     * @since 2.0.0
+     * @return void
+     */
+    public function processTransactionNotification($idTransaction)
+    {
+        $validateOrderResult = false;
+        $transaction = PaylinePaymentGateway::getTransactionInformations($idTransaction);
+        // Wait for a transaction into pending state
+        if (PaylinePaymentGateway::isValidResponse($transaction, PaylinePaymentGateway::$pendingResponseCode)) {
+            if (isset($transaction['formatedPrivateDataList']) && is_array($transaction['formatedPrivateDataList'])
+                && isset($transaction['formatedPrivateDataList']['id_cart'])
+                && isset($transaction['formatedPrivateDataList']['id_customer'])
+                && isset($transaction['formatedPrivateDataList']['secure_key'])
+            ) {
+                // OK we can process the order via customer return
+                $idCart = (int)$transaction['formatedPrivateDataList']['id_cart'];
+                // Check if cart exists
+                $cart = new Cart($idCart);
+                if (!Validate::isLoadedObject($cart)) {
+                    die(Tools::jsonEncode(array(
+                        'result' => $validateOrderResult,
+                        'error' => 'Invalid Cart ID #'.$idCart.' - Cart does not exists',
+                    )));
+                }
+                // Check secure_key and id_customer on the cart, compare it to the transaction
+                if ($cart->secure_key != $transaction['formatedPrivateDataList']['secure_key'] || $cart->id_customer != $transaction['formatedPrivateDataList']['id_customer']) {
+                    die(Tools::jsonEncode(array(
+                        'result' => $validateOrderResult,
+                        'error' => 'Transaction is not linked to the right Customer for Cart ID #'.$idCart,
+                    )));
+                }
+                // Check that the transaction have at least one statusHistoryList items
+                if (!isset($transaction['statusHistoryList']) || !is_array($transaction['statusHistoryList']) || !sizeof($transaction['statusHistoryList'])) {
+                    die(Tools::jsonEncode(array(
+                        'result' => $validateOrderResult,
+                        'error' => 'Transaction does not contains any statusHistoryList item',
+                    )));
+                }
+                // Check that the transaction have at least one statusHistory items
+                if (!isset($transaction['statusHistoryList']['statusHistory']) || !is_array($transaction['statusHistoryList']['statusHistory']) || !sizeof($transaction['statusHistoryList']['statusHistory'])) {
+                    die(Tools::jsonEncode(array(
+                        'result' => $validateOrderResult,
+                        'error' => 'Transaction does not contains any statusHistory item',
+                    )));
+                }
+
+                // Always clean Cart::orderExists cache before trying to create the order
+                if (class_exists('Cache', false) && method_exists('Cache', 'clean')) {
+                    Cache::clean('Cart::orderExists_' . $cart->id);
+                }
+                $orderExists = $cart->OrderExists();
+                if (!$orderExists) {
+                    // There is no order for this cart
+                    die(Tools::jsonEncode(array(
+                        'result' => $validateOrderResult,
+                        'error' => 'Invalid Cart ID #'.$idCart.' - Order does not exists',
+                    )));
+                }
+
+                // Retrieve order
+                $idOrder = Order::getOrderByCartId($cart->id);
+                $order = new Order($idOrder);
+                if (Validate::isLoadedObject($order)) {
+                    $statusHistoryList = $transaction['statusHistoryList']['statusHistory'];
+
+                    // Retrieve the latest status (already sorted by date into PaylinePaymentGateway)
+                    $statusHistory = current($statusHistoryList);
+                    if ($statusHistory['status'] == 'ACCEPTED') {
+                        // Transaction accepted
+                        if (!$order->hasBeenPaid()) {
+                            // Change order state if order has not already been paid
+                            $validateOrderResult = true;
+
+                            $history = new OrderHistory();
+                            $history->id_order = (int)$order->id;
+                            $history->changeIdOrderState(_PS_OS_PAYMENT_, (int)$order->id);
+                            $history->addWithemail();
+                        }
+                    } elseif ($statusHistory['status'] == 'ON_HOLD_PARTNER') {
+                        // We are still waiting for the transaction validation, nothing to do here
+                    } else {
+                        // Transaction refused
+                        if ($order->getCurrentState() != _PS_OS_CANCELED_) {
+                            // Change order state if order has not already been canceled
+                            $validateOrderResult = true;
+
+                            // Change order state
+                            $history = new OrderHistory();
+                            $history->id_order = (int)$order->id;
+                            $history->changeIdOrderState(_PS_OS_CANCELED_, (int)$order->id);
+                            $history->addWithemail();
+                        }
+                    }
+                }
+            }
+        }
+        if (ob_get_length() > 0) {
+            ob_clean();
+        }
+        die(Tools::jsonEncode(array('result' => $validateOrderResult)));
+    }
+
+    /**
+     * Process order update from NX transaction notification
+     * @param string $idTransaction
+     * @param string $paymentRecordId
+     * @since 2.1.0
+     * @return void
+     */
+    public function processNxNotification($idTransaction, $paymentRecordId)
+    {
+        $notificationResult = false;
+        $transaction = PaylinePaymentGateway::getTransactionInformations($idTransaction);
+        // Wait for a transaction into pending state
+        if (!empty($transaction['payment']['contractNumber'])) {
+            // Get payment record
+            $paymentRecord = PaylinePaymentGateway::getPaymentRecord($transaction['payment']['contractNumber'], $paymentRecordId);
+            if (!PaylinePaymentGateway::isValidResponse($paymentRecord, array('02500'))) {
+                die(Tools::jsonEncode(array(
+                    'result' => $notificationResult,
+                    'error' => 'Invalid paymentRecord response',
+                )));
+            }
+
+            // Retrieve cart
+            $idCart = null;
+            $cart = null;
+            if (isset($transaction['formatedPrivateDataList']) && is_array($transaction['formatedPrivateDataList']) && isset($transaction['formatedPrivateDataList']['id_cart'])) {
+                $idCart = (int)$transaction['formatedPrivateDataList']['id_cart'];
+            } else {
+                // Retrieve id_cart from order reference
+                $idCart = PaylinePaymentGateway::getCartIdFromOrderReference($transaction['order']['ref']);
+            }
+            // Check if cart exists
+            $cart = new Cart($idCart);
+            if (!Validate::isLoadedObject($cart)) {
+                die(Tools::jsonEncode(array(
+                    'result' => $notificationResult,
+                    'error' => 'Invalid Cart ID #'.$idCart.' - Cart does not exists',
+                )));
+            }
+
+            if (isset($transaction['formatedPrivateDataList']) && is_array($transaction['formatedPrivateDataList'])
+                && isset($transaction['formatedPrivateDataList']['id_customer'])
+                && isset($transaction['formatedPrivateDataList']['secure_key'])
+            ) {
+                // OK we can process the order via customer return
+                // Check secure_key and id_customer on the cart, compare it to the transaction
+                if ($cart->secure_key != $transaction['formatedPrivateDataList']['secure_key'] || $cart->id_customer != $transaction['formatedPrivateDataList']['id_customer']) {
+                    die(Tools::jsonEncode(array(
+                        'result' => $notificationResult,
+                        'error' => 'Transaction is not linked to the right Customer for Cart ID #'.$idCart,
+                    )));
+                }
+            }
+
+            // Always clean Cart::orderExists cache before trying to create the order
+            if (class_exists('Cache', false) && method_exists('Cache', 'clean')) {
+                Cache::clean('Cart::orderExists_' . $cart->id);
+            }
+            $orderExists = $cart->OrderExists();
+            if (!$orderExists) {
+                // There is no order for this cart
+                die(Tools::jsonEncode(array(
+                    'result' => $notificationResult,
+                    'error' => 'Invalid Cart ID #'.$idCart.' - Order does not exists',
+                )));
+            }
+
+            // Retrieve order
+            $idOrder = Order::getOrderByCartId($cart->id);
+            $order = new Order($idOrder);
+            if (Validate::isLoadedObject($order)) {
+                // Check if transaction ID is the same
+                $orderPayments = OrderPayment::getByOrderReference($order->reference);
+                if (isset($paymentRecord['billingRecordList']) && is_array($paymentRecord['billingRecordList']) &&
+                    isset($paymentRecord['billingRecordList']['billingRecord']) && is_array($paymentRecord['billingRecordList']['billingRecord'])) {
+                    $validTransactionCount = PaylinePaymentGateway::getValidatedRecurringPayment($paymentRecord);
+
+                    // Check if the recurring is finished and full paid
+                    foreach ($paymentRecord['billingRecordList']['billingRecord'] as $kBillingRecord => $billingRecord) {
+                        // Delayed
+                        if ($billingRecord['calculated_status'] == 4) {
+                            continue;
+                        }
+                        // A transaction has been refused, check if the next transaction has not yet been processed
+                        if ($billingRecord['calculated_status'] == 2) {
+                            $nextBillingRecord = null;
+                            if (isset($paymentRecord['billingRecordList']['billingRecord'][$kBillingRecord+1])) {
+                                $nextBillingRecord = $paymentRecord['billingRecordList']['billingRecord'][$kBillingRecord+1];
+                            }
+                            if ($nextBillingRecord === null || $nextBillingRecord['calculated_status'] != 1) {
+                                // The next transaction has not been processed yet, or is also invalid
+                                // Or there is no more planned transaction for this billingRecord
+                                if (!count($order->getHistory((int)$this->context->language->id, (int)Configuration::get('PAYLINE_ID_STATE_ALERT_SCHEDULE'), true))) {
+                                    // Change order state
+                                    $history = new OrderHistory();
+                                    $history->id_order = (int)$order->id;
+                                    $history->changeIdOrderState((int)Configuration::get('PAYLINE_ID_STATE_ALERT_SCHEDULE'), (int)$order->id);
+                                    $history->addWithemail();
+                                }
+                            }
+                        }
+                    }
+
+                    // Loop on billing list to add payment records on Order
+                    foreach ($paymentRecord['billingRecordList']['billingRecord'] as $billingRecord) {
+                        if ($billingRecord['calculated_status'] == 1) {
+                            // Check if OrderPayment exists for this transaction
+                            $orderPaymentExists = false;
+                            foreach ($orderPayments as $orderPayment) {
+                                if ($orderPayment->transaction_id == $billingRecord['transaction']['id']) {
+                                    $orderPaymentExists = true;
+                                    break;
+                                }
+                            }
+                            if (!$orderPaymentExists) {
+                                // There is OrderPayment for this transaction, add a new order payment to the current order
+                                if ($billingRecord['calculated_status'] == 1) {
+                                    $notificationResult &= $this->addOrderPaymentToOrder($order, Tools::ps_round($billingRecord['amount'] / 100, 2), $billingRecord['transaction']['id'], date('Y-m-d H:i:s', PaylinePaymentGateway::getTimestampFromPaylineDate($billingRecord['transaction']['date'])));
+                                }
+                            }
+                        }
+                    }
+                    if ($validTransactionCount == $paymentRecord['recurring']['billingLeft']) {
+                        // Order is now 100% paid
+                        if (!count($order->getHistory((int)$this->context->language->id, _PS_OS_PAYMENT_, true))) {
+                            // Change order state
+                            $history = new OrderHistory();
+                            $history->id_order = (int)$order->id;
+                            $history->changeIdOrderState(_PS_OS_PAYMENT_, (int)$order->id, true);
+                            $history->addWithemail();
+                        }
+                    }
+                }
+            }
+        }
+        if (ob_get_length() > 0) {
+            ob_clean();
+        }
+        die(Tools::jsonEncode(array('result' => $notificationResult)));
+    }
+
+    /**
      * Clone of Order::addOrderPayment() - We force total_paid_real to be = 0 instead of a negative value, so we can update without warning
      * @since 2.0.0
      * @return bool
      */
-    public function addOrderPayment($order, $amount_paid, $payment_method = null, $payment_transaction_id = null, $currency = null, $date = null, $order_invoice = null)
+    protected function addOrderPaymentAfterRefund(Order $order, $amount_paid, $payment_method = null, $payment_transaction_id = null, $currency = null, $date = null, $order_invoice = null)
     {
         $order_payment = new OrderPayment();
         $order_payment->order_reference = $order->reference;
@@ -1646,5 +2382,21 @@ class payline extends PaymentModule
         }
 
         return $res;
+    }
+
+    /**
+     * Use Order::addOrderPayment(), but retrieve invoice first
+     * @since 2.1.0
+     * @return bool
+     */
+    protected function addOrderPaymentToOrder(Order $order, $amountPaid, $transactionId, $date = null)
+    {
+        // Get first invoice
+        $invoice = $order->getInvoicesCollection()->getFirst();
+        if (!($invoice instanceof OrderInvoice)) {
+            $invoice = null;
+        }
+
+        return $order->addOrderPayment($amountPaid, null, $transactionId, null, $date, $invoice);
     }
 }

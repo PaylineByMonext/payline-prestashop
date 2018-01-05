@@ -19,8 +19,8 @@
 	<div 
 		id="PaylineWidget"
 		data-auto-init="true"
-		data-token="{$payline_token}"
-		data-template="{$payline_ux_mode}"
+		data-token="{$payline_token|escape:'html':'UTF-8'}"
+		data-template="{$payline_ux_mode|escape:'html':'UTF-8'}"
 		data-embeddedredirectionallowed="false"
 	>
 	</div>
@@ -29,6 +29,6 @@
 
 <ul class="footer_links clearfix">
 	<li>
-		<a class="btn btn-default button button-small" href="{$link->getPageLink('order', true)}"><span><i class="icon-chevron-left"> </i> {l s='Back' mod='payline'}</span></a>
+		<a class="btn btn-default button button-small" href="{$link->getPageLink('order', true)|escape:'html':'UTF-8'}"><span><i class="icon-chevron-left"> </i> {l s='Back' mod='payline'}</span></a>
 	</li>
 </ul>

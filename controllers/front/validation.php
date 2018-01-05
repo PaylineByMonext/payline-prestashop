@@ -12,7 +12,6 @@ class paylineValidationModuleFrontController extends ModuleFrontController
 
     /**
      * @see FrontController::initContent()
-     * @todo
      */
     public function initContent()
     {
@@ -30,8 +29,6 @@ class paylineValidationModuleFrontController extends ModuleFrontController
 
         if (!empty($paylineToken)) {
             $this->module->processCustomerPaymentReturn($paylineToken);
-        } else {
-            // TODO redirection vers controleur + erreur
         }
     }
 }

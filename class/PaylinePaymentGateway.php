@@ -12,6 +12,33 @@ class PaylinePaymentGateway
 {
     private static $merchantSettings = null;
 
+    // API version to pass on WS call
+    const API_VERSION = 17;
+
+    const WEB_PAYMENT_METHOD = 1;
+    const RECURRING_PAYMENT_METHOD = 2;
+
+    /**
+     * Response code that does define the transaction approved state
+     * @var array
+     */
+    public static $approvedResponseCode = array(
+        '34230',
+        '34330',
+        '02500',
+        '02501',
+    );
+
+    /**
+     * Response code that does define the pending state
+     * @var array
+     */
+    public static $pendingResponseCode = array(
+        '02000',
+        '02005',
+        '02016',
+    );
+
     /**
      * Get Payline instance
      * @since 2.0.0
@@ -71,6 +98,28 @@ class PaylinePaymentGateway
     }
 
     /**
+     * Get merchant settings
+     * @since 2.1.0
+     * @return array
+     */
+    public static function getMerchantSettings()
+    {
+        static $merchantSettings = null;
+
+        if ($merchantSettings === null) {
+            // Get merchant settings
+            $merchantSettings = self::getInstance()->getMerchantSettings(array());
+
+            $result = (is_array($merchantSettings) && !empty($merchantSettings['result']) && self::isValidResponse($merchantSettings));
+            if ($result) {
+                self::$merchantSettings = $merchantSettings;
+            }
+        }
+
+        return $merchantSettings;
+    }
+
+    /**
      * Check if credentials are correct
      * @since 2.0.0
      * @return bool
@@ -81,7 +130,7 @@ class PaylinePaymentGateway
 
         if ($result === null) {
             // Get merchant settings
-            $merchantSettings = self::getInstance()->getMerchantSettings(array());
+            $merchantSettings = self::getMerchantSettings();
 
             $result = (is_array($merchantSettings) && !empty($merchantSettings['result']) && self::isValidResponse($merchantSettings));
             if ($result) {
@@ -104,6 +153,24 @@ class PaylinePaymentGateway
         }
 
         return array();
+    }
+
+    /**
+     * Get current point of sales (POS)
+     * @since 2.1.0
+     * @param string $posLabel
+     * @return array
+     */
+    public static function getPointOfSale($posLabel)
+    {
+        $posList = self::getPointOfSales();
+        foreach ($posList as $pos) {
+            if ($pos['label'] == $posLabel) {
+                return $pos;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -245,9 +312,10 @@ class PaylinePaymentGateway
      * Create a request for a web payment
      * @since 2.0.0
      * @param Context $context
+     * @param int $paymentMethod
      * @return array
      */
-    public static function createPaymentRequest(Context $context)
+    public static function createPaymentRequest(Context $context, $paymentMethod)
     {
         $invoiceAddress = new Address($context->cart->id_address_invoice);
         $deliveryAddress = new Address($context->cart->id_address_delivery);
@@ -262,9 +330,26 @@ class PaylinePaymentGateway
         $instance = self::getInstance();
 
         // Get custom payment page code
-        $customPaymentPageCode = Configuration::get('PAYLINE_WEB_CASH_CUSTOM_CODE');
+        if ($paymentMethod == self::WEB_PAYMENT_METHOD) {
+            $customPaymentPageCode = Configuration::get('PAYLINE_WEB_CASH_CUSTOM_CODE');
+        } elseif ($paymentMethod == self::RECURRING_PAYMENT_METHOD) {
+            $customPaymentPageCode = Configuration::get('PAYLINE_RECURRING_CUSTOM_CODE');
+        }
         if (empty($customPaymentPageCode)) {
             $customPaymentPageCode = null;
+        }
+
+        // Payment mode
+        $paymentMode = 'CPT';
+        if ($paymentMethod == self::RECURRING_PAYMENT_METHOD) {
+            $paymentMode = 'NX';
+        }
+        // Payment action
+        $paymentAction = '101';
+        if ($paymentMethod == self::WEB_PAYMENT_METHOD) {
+            $paymentAction = Configuration::get('PAYLINE_WEB_CASH_ACTION');
+        } elseif ($paymentMethod == self::RECURRING_PAYMENT_METHOD) {
+            $paymentAction = '101';
         }
 
         // Get contracts
@@ -274,12 +359,12 @@ class PaylinePaymentGateway
         $contractNumber = current($contracts);
 
         $params = array(
+            'version' => self::API_VERSION,
             'payment' => array(
                 'amount' => round($orderTotalWt * 100),
                 'currency' => $context->currency->iso_code_num,
-                // TODO Switch depending on payment method
-                'mode' => 'CPT',
-                'action' => Configuration::get('PAYLINE_WEB_CASH_ACTION'),
+                'mode' => $paymentMode,
+                'action' => $paymentAction,
                 'contractNumber' => $contractNumber,
             ),
             'order' => array(
@@ -289,11 +374,6 @@ class PaylinePaymentGateway
                 'taxes' => round($orderTaxes * 100),
                 'date' => date('d/m/Y H:i'),
                 'currency' => $context->currency->iso_code_num,
-                // TODO
-                // 'deliveryMode' => 4,
-                // 'deliveryTime' => 1,
-                // 'deliveryExpectedDelay' => 7,
-                // 'deliveryExpectedDate' => date('d/m/Y', strtotime('now + 7 day')),
             ),
             'contracts' => (sizeof($contracts) ? $contracts : null),
             'secondContracts' => (sizeof($secondContracts) ? $secondContracts : null),
@@ -332,9 +412,18 @@ class PaylinePaymentGateway
                 $params['buyer']['title'] = 1;
             }
         }
+        // Set buyer wallet id
+        if (($paymentMethod == self::WEB_PAYMENT_METHOD && Configuration::get('PAYLINE_WEB_CASH_BY_WALLET')) || ($paymentMethod == self::RECURRING_PAYMENT_METHOD && Configuration::get('PAYLINE_RECURRING_BY_WALLET'))) {
+            $params['buyer']['walletId'] = Tools::encrypt((int)$context->customer->id);
+        }
         // Customization
         if (!empty($customPaymentPageCode)) {
             $params['customPaymentPageCode'] = $customPaymentPageCode;
+        }
+
+        // Recurring informations (NX)
+        if ($paymentMethod == self::RECURRING_PAYMENT_METHOD) {
+            $params['recurring'] = self::getNxConfiguration($params['payment']['amount']);
         }
 
         // Add order details infos
@@ -357,8 +446,55 @@ class PaylinePaymentGateway
         $result = $instance->doWebPayment($params);
 
         if (self::isValidResponse($result)) {
-            return $result;
+            return array($result, $params);
         }
+
+        return array(null, $params);
+    }
+
+    /**
+     * Retrieve cart id from order reference
+     * @since 2.1.0
+     * @param string $orderReference
+     * @return int|null
+     */
+    public static function getCartIdFromOrderReference($orderReference)
+    {
+        if (preg_match('/cart([0-9]+)(try([0-9]+))?/', $orderReference, $matches)) {
+            return (int)$matches[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Generate recurring configuration depending on total to pay
+     * @since 2.1.0
+     * @param float $totalToPay
+     * @return array
+     */
+    public static function getNxConfiguration($totalToPay)
+    {
+        $billingLeft = (int)Configuration::get('PAYLINE_RECURRING_NUMBER');
+        $firstWeight = (int)Configuration::get('PAYLINE_RECURRING_FIRST_WEIGHT');
+        if ($firstWeight > 0) {
+            // Calculate first amount regarding weight of first period
+            $firstAmount = round($totalToPay * ($firstWeight / 100));
+        } else {
+            // Calculate first amount regarding billingLeft
+            $firstAmount = round($totalToPay / $billingLeft);
+        }
+        // Calculare recurrent amount
+        $recurrentAmount = round(($totalToPay - $firstAmount) / ($billingLeft - 1));
+        // Recalculate first amount because we may have delta
+        $firstAmount = round($totalToPay - ($recurrentAmount * ($billingLeft - 1)));
+
+        return array(
+            'firstAmount' => $firstAmount,
+            'amount' => $recurrentAmount,
+            'billingLeft' => $billingLeft,
+            'billingCycle' => Configuration::get('PAYLINE_RECURRING_PERIODICITY'),
+        );
     }
 
     /**
@@ -401,23 +537,62 @@ class PaylinePaymentGateway
     }
 
     /**
-     * Parse list of private data and create key/value association instead of classic key/value list
-     * @since 2.0.0
+     * Loop into result, format and sort some fields
+     * @since 2.1.0
      * @param array $result
      * @return array
      */
-    public static function parsePrivateDataList(&$result)
+    private static function formatAndSortResult(&$result)
     {
+        if (!is_array($result)) {
+            return $result;
+        }
+
         $result['formatedPrivateDataList'] = array();
 
-        if (is_array($result) && isset($result['privateDataList']) && is_array($result['privateDataList']) && isset($result['privateDataList']['privateData']) && is_array($result['privateDataList']['privateData'])) {
-            if (isset($result['privateDataList']) && is_array($result['privateDataList']) && isset($result['privateDataList']['privateData']) && is_array($result['privateDataList']['privateData'])) {
-                foreach ($result['privateDataList']['privateData'] as $k => $v) {
-                    if (is_array($v) && isset($v['key']) && isset($v['value'])) {
-                        $result['formatedPrivateDataList'][$v['key']] = $v['value'];
-                    }
+        // Parse list of private data and create key/value association instead of classic key/value list
+        if (isset($result['privateDataList']) && is_array($result['privateDataList']) && isset($result['privateDataList']['privateData']) && is_array($result['privateDataList']['privateData'])) {
+            foreach ($result['privateDataList']['privateData'] as $k => $v) {
+                if (is_array($v) && isset($v['key']) && isset($v['value'])) {
+                    $result['formatedPrivateDataList'][$v['key']] = $v['value'];
                 }
             }
+        }
+
+        // Parse list of billing record and add a calculated_status column
+        if (isset($result['billingRecordList']) && is_array($result['billingRecordList']) && isset($result['billingRecordList']['billingRecord']) && is_array($result['billingRecordList']['billingRecord'])) {
+            foreach ($result['billingRecordList']['billingRecord'] as &$billingRecord) {
+                $billingRecord['calculated_status'] = $billingRecord['status'];
+                if ($billingRecord['status'] != 2 && isset($billingRecord['result']) && (!PaylinePaymentGateway::isValidResponse($billingRecord, self::$approvedResponseCode) || !PaylinePaymentGateway::isValidResponse($billingRecord, self::$pendingResponseCode))) {
+                    $billingRecord['calculated_status'] = 2;
+                }
+            }
+        }
+
+        // Sort associatedTransactionsList by date, latest first (not done by the API)
+        if (isset($result['associatedTransactionsList']) && isset($result['associatedTransactionsList']['associatedTransactions']) && is_array($result['associatedTransactionsList']['associatedTransactions'])) {
+            uasort($result['associatedTransactionsList']['associatedTransactions'], function ($a, $b) {
+                if (self::getTimestampFromPaylineDate($a['date']) == self::getTimestampFromPaylineDate($b['date'])) {
+                    return 0;
+                } elseif (self::getTimestampFromPaylineDate($a['date']) > self::getTimestampFromPaylineDate($b['date'])) {
+                    return -1;
+                } else {
+                    return 1;
+                }
+            });
+        }
+
+        // Sort statusHistoryList by date, latest first (not done by the API)
+        if (isset($result['statusHistoryList']) && isset($result['statusHistoryList']['statusHistory']) && is_array($result['statusHistoryList']['statusHistory'])) {
+            uasort($result['statusHistoryList']['statusHistory'], function ($a, $b) {
+                if (self::getTimestampFromPaylineDate($a['date']) == self::getTimestampFromPaylineDate($b['date'])) {
+                    return 0;
+                } elseif (self::getTimestampFromPaylineDate($a['date']) > self::getTimestampFromPaylineDate($b['date'])) {
+                    return -1;
+                } else {
+                    return 1;
+                }
+            });
         }
 
         return $result;
@@ -433,11 +608,12 @@ class PaylinePaymentGateway
     {
         $instance = self::getInstance();
         $params = array(
+            'version' => self::API_VERSION,
             'token' => $token,
         );
         $result = $instance->getWebPaymentDetails($params);
-        // Parse list of private data and create key/value association instead of classic key/value list
-        self::parsePrivateDataList($result);
+        // Loop into result, format and sort some fields
+        self::formatAndSortResult($result);
 
         return $result;
     }
@@ -452,6 +628,7 @@ class PaylinePaymentGateway
     {
         $instance = self::getInstance();
         $params = array(
+            'version' => self::API_VERSION,
             'transactionId' => $transactionId,
             'transactionHistory' => 'Y',
             'archiveSearch' => null,
@@ -461,23 +638,55 @@ class PaylinePaymentGateway
         $result = $instance->getTransactionDetails($params);
 
         if (self::isValidResponse($result)) {
-            // Sort associatedTransactionsList by date, latest first (not done by the API)
-            if (isset($result['associatedTransactionsList']) && isset($result['associatedTransactionsList']['associatedTransactions']) && is_array($result['associatedTransactionsList']['associatedTransactions'])) {
-                uasort($result['associatedTransactionsList']['associatedTransactions'], function ($a, $b) {
-                    if (self::getTimestampFromPaylineDate($a['date']) == self::getTimestampFromPaylineDate($b['date'])) {
-                        return 0;
-                    } elseif (self::getTimestampFromPaylineDate($a['date']) > self::getTimestampFromPaylineDate($b['date'])) {
-                        return -1;
-                    } else {
-                        return 1;
-                    }
-                });
-            }
-            // Parse list of private data and create key/value association instead of classic key/value list
-            self::parsePrivateDataList($result);
+            // Loop into result, format and sort some fields
+            self::formatAndSortResult($result);
         }
 
         return $result;
+    }
+
+    /**
+     * Return informations regarding a recurring payment
+     * @since 2.1.0
+     * @param string $contractNumber
+     * @param string $paymentRecordId
+     * @return array
+     */
+    public static function getPaymentRecord($contractNumber, $paymentRecordId)
+    {
+        $instance = self::getInstance();
+        $params = array(
+            'version' => self::API_VERSION,
+            'contractNumber' => $contractNumber,
+            'paymentRecordId' => $paymentRecordId,
+        );
+        $result = $instance->getPaymentRecord($params);
+        // Loop into result, format and sort some fields
+        self::formatAndSortResult($result);
+
+        return $result;
+    }
+
+    /**
+     * Return number of validated transaction for a recurring payment
+     * @since 2.1.0
+     * @param array $paymentRecord
+     * @return int
+     */
+    public static function getValidatedRecurringPayment($paymentRecord)
+    {
+        $validTransactionCount = 0;
+        if (isset($paymentRecord['billingRecordList']['billingRecord']) && is_array($paymentRecord['billingRecordList']['billingRecord'])) {
+            // Loop on billing list to add payment records on Order
+            foreach ($paymentRecord['billingRecordList']['billingRecord'] as $billingRecord) {
+                // Increment valid transaction count
+                if ($billingRecord['status'] == 1) {
+                    $validTransactionCount++;
+                }
+            }
+        }
+
+        return $validTransactionCount;
     }
 
     /**
@@ -495,6 +704,7 @@ class PaylinePaymentGateway
         $transactionTime = self::getTimestampFromPaylineDate($transaction['transaction']['date']);
 
         $params = array(
+            'version' => self::API_VERSION,
             'transactionID' => $transactionId,
             'payment' => array(
                 'amount' => $transaction['payment']['amount'],
@@ -534,6 +744,7 @@ class PaylinePaymentGateway
         $transaction = self::getTransactionInformations($transactionId);
 
         $params = array(
+            'version' => self::API_VERSION,
             'transactionID' => $transactionId,
             'payment' => array(
                 'amount' => (isset($specificAmount) ? round($specificAmount * 100) : $transaction['payment']['amount']),
@@ -565,6 +776,7 @@ class PaylinePaymentGateway
         $transaction = self::getTransactionInformations($transactionId);
 
         $params = array(
+            'version' => self::API_VERSION,
             'transactionID' => $transactionId,
             'comment' => $comment,
         );
@@ -615,14 +827,17 @@ class PaylinePaymentGateway
      */
     public static function getTimestampFromPaylineDate($date)
     {
+        $hour = $minutes = $seconds = 0;
         list($day, $month, $year) = explode('/', $date);
-        list($year, $hour) = explode(' ', $year);
-        $timestamp = explode(':', $hour);
-        if (sizeof($timestamp) == 3) {
-            list($hour, $minutes, $seconds) = explode(':', $hour);
-        } else {
-            list($hour, $minutes) = explode(':', $hour);
-            $seconds = 0;
+        if (strpos($year, ':')) {
+            list($year, $hour) = explode(' ', $year);
+            $timestamp = explode(':', $hour);
+            if (sizeof($timestamp) == 3) {
+                list($hour, $minutes, $seconds) = explode(':', $hour);
+            } else {
+                list($hour, $minutes) = explode(':', $hour);
+                $seconds = 0;
+            }
         }
 
         return mktime((int)$hour, (int)$minutes, (int)$seconds, (int)$month, (int)$day, (int)$year);

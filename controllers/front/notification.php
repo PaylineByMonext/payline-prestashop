@@ -17,8 +17,16 @@ class paylineNotificationModuleFrontController extends ModuleFrontController
     {
         parent::initContent();
 
-        if (Tools::getValue('notificationType') == 'WEBTRS' && Tools::getValue('token')) {
+        $notificationType = Tools::getValue('notificationType');
+
+        if ($notificationType == 'WEBTRS' && Tools::getValue('token')) {
             $this->module->processNotification(Tools::getValue('token'));
+        } elseif ($notificationType == 'TRS' && Tools::getValue('transactionId')) {
+            $this->module->processTransactionNotification(Tools::getValue('transactionId'));
+        } elseif ($notificationType == 'BILL' && Tools::getValue('transactionId') && Tools::getValue('paymentRecordId')) {
+            $this->module->processNxNotification(Tools::getValue('transactionId'), Tools::getValue('paymentRecordId'));
+        } else {
+            PrestaShopLogger::addLog('Payline - Unknown notification type "'. $notificationType .'"');
         }
     }
 

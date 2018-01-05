@@ -14,7 +14,21 @@ $(document).ready(function() {
         $('input[name=selected_tab]').val($(this).data('identifier'));
     });
     $(document).on('change', 'select#PAYLINE_WEB_CASH_ACTION', function() {
-        $('div.payline-autorization-only').toggleClass('hidden');
+        $('#web-payment-configuration div.payline-autorization-only').toggleClass('hidden');
+    });
+    $(document).on('change', 'select#PAYLINE_WEB_CASH_UX', function() {
+        if ($(this).val() == 'redirect') {
+            $('#web-payment-configuration div.payline-redirect-only').removeClass('hidden');
+        } else {
+            $('#web-payment-configuration div.payline-redirect-only').addClass('hidden');
+        }
+    });
+    $(document).on('change', 'select#PAYLINE_RECURRING_UX', function() {
+        if ($(this).val() == 'redirect') {
+            $('#recurring-payment-configuration div.payline-redirect-only').removeClass('hidden');
+        } else {
+            $('#recurring-payment-configuration div.payline-redirect-only').addClass('hidden');
+        }
     });
 
     // Contracts

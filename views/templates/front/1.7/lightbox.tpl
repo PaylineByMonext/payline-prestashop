@@ -7,6 +7,10 @@
 *
 *}
 
+{if isset($payline_subtitle) && strlen($payline_subtitle)}
+	<p>{$payline_subtitle}</p>
+{/if}
+
 <div 
 	id="PaylineWidget"
 	data-auto-init="false"
