@@ -16,13 +16,6 @@ $(document).ready(function() {
     $(document).on('change', 'select#PAYLINE_WEB_CASH_ACTION', function() {
         $('div.payline-autorization-only').toggleClass('hidden');
     });
-    $(document).on('change', 'select#PAYLINE_WEB_CASH_UX', function() {
-        if ($(this).val() == 'redirect') {
-            $('div.payline-redirect-only').removeClass('hidden');
-        } else {
-            $('div.payline-redirect-only').addClass('hidden');
-        }
-    });
 
     // Contracts
     $('.payline-contracts-list').sortable({

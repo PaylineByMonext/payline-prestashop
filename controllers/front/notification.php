@@ -19,8 +19,6 @@ class paylineNotificationModuleFrontController extends ModuleFrontController
 
         if (Tools::getValue('notificationType') == 'WEBTRS' && Tools::getValue('token')) {
             $this->module->processNotification(Tools::getValue('token'));
-        } elseif (Tools::getValue('notificationType') == 'TRS' && Tools::getValue('transactionId')) {
-            $this->module->processTransactionNotification(Tools::getValue('transactionId'));
         }
     }
 

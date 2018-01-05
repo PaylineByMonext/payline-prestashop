@@ -1,3 +1,10 @@
+2.1
+===
+<h2>released on 2018-01-05</h2>
+<ul>
+<li>nx payment method</li>
+</ul>
+
 2.0
 ===
 <h2>released on 2017-12-08</h2>

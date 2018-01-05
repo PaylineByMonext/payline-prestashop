@@ -473,18 +473,6 @@ class PaylinePaymentGateway
                     }
                 });
             }
-            // Sort statusHistoryList by date, latest first (not done by the API)
-            if (isset($result['statusHistoryList']) && isset($result['statusHistoryList']['statusHistory']) && is_array($result['statusHistoryList']['statusHistory'])) {
-                uasort($result['statusHistoryList']['statusHistory'], function ($a, $b) {
-                    if (self::getTimestampFromPaylineDate($a['date']) == self::getTimestampFromPaylineDate($b['date'])) {
-                        return 0;
-                    } elseif (self::getTimestampFromPaylineDate($a['date']) > self::getTimestampFromPaylineDate($b['date'])) {
-                        return -1;
-                    } else {
-                        return 1;
-                    }
-                });
-            }
             // Parse list of private data and create key/value association instead of classic key/value list
             self::parsePrivateDataList($result);
         }
