@@ -1,3 +1,10 @@
+2.2
+===
+<h2>released on 2018-01-20</h2>
+<ul>
+<li>recurring payment method</li>
+</ul>
+
 2.1
 ===
 <h2>released on 2018-01-05</h2>

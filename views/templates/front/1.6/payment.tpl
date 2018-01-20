@@ -7,11 +7,11 @@
 *
 *}
 
-{capture name=path}{l s='Pay with Payline' mod='payline'}{/capture}
+{capture name=path}{$payline_title|escape:'html':'UTF-8'}{/capture}
 
 {include file="$tpl_dir./errors.tpl"}
 
-<h1 class="page-heading">{l s='Pay with Payline' mod='payline'}</h1>
+<h1 class="page-heading">{$payline_title|escape:'html':'UTF-8'}{if isset($payline_subtitle) && strlen($payline_subtitle)}<br />{$payline_subtitle|escape:'html':'UTF-8'}{/if}</h1>
 
 <div class="block-center">
 	<h4>{l s='Total to pay:' mod='payline'}&nbsp;{displayPrice price=$payline_cart_total}</h4>

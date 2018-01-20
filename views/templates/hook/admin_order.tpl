@@ -11,6 +11,60 @@
 	{l s='In order to refund the customer via Payline, you must check the “[1]“ option' sprintf=['[1]' => {l s='Generate a credit slip' mod='payline'}] mod='payline'}
 </div>
 
+{if isset($billingListRec)}
+<div class="panel col-xs-12{if empty($billingListRec)} hidden{/if}">
+	<div class="panel-heading"><i class="icon-money"></i> {l s='Recurring information' mod='payline'} - {l s='Payment record #%s' sprintf=[$paymentRecordId] mod='payline'}</div>
+	<div class="table-responsive">
+		<table class="table">
+			<thead>
+				<th><span class="title_box">{l s='Due date' mod='payline'}</span></th>
+				<th><span class="title_box">{l s='Amount' mod='payline'}</span></th>
+				<th><span class="title_box">{l s='Transaction #' mod='payline'}</span></th>
+				<th><span class="title_box">{l s='Order #' mod='payline'}</span></th>
+				<th><span class="title_box">{l s='Status' mod='payline'}</span></th>
+			</thead>
+			<tbody>
+		{foreach from=$billingListRec item=billingRecord}
+			<tr>
+				<td>{$billingRecord.date|escape:'html':'UTF-8'}</td>
+				<td>{displayPrice price=($billingRecord.amount/100)}</td>
+				<td>
+					{if isset($billingRecord.transaction)}
+						{$billingRecord.transaction.id|escape:'html':'UTF-8'}
+					{else}
+						{l s='N/A' mod='payline'}
+					{/if}
+				</td>
+				<td>
+					{if isset($billingRecord.pl_linkedIdOrder)}
+						<a href="{$billingRecord.pl_linkToOrder|escape:'html':'UTF-8'}">{$billingRecord.pl_linkedIdOrder|escape:'html':'UTF-8'}</a>
+					{else}
+						{l s='N/A' mod='payline'}
+					{/if}
+				</td>
+				<td>
+					<span class="badge badge-{if $billingRecord.calculated_status == 1}success{elseif $billingRecord.calculated_status == 2}danger{elseif $billingRecord.calculated_status == 3 || $billingRecord.calculated_status == 4}warning{elseif $billingRecord.calculated_status == 0}default{/if}">
+						{if $billingRecord.calculated_status == 0}
+							{l s='WAITING' mod='payline'}
+						{elseif $billingRecord.calculated_status == 1}
+							{l s='OK' mod='payline'}
+						{elseif $billingRecord.calculated_status == 2}
+							{l s='NOK' mod='payline'}
+						{elseif $billingRecord.calculated_status == 3}
+							{l s='IN PROGRESS' mod='payline'}
+						{elseif $billingRecord.calculated_status == 4}
+							{l s='CANCELED' mod='payline'}
+						{/if}
+					</span>
+				</td>
+			</tr>
+		{/foreach}
+			<tbody>
+		</table>
+	</div>
+</div>
+{/if}
+
 {if isset($billingList)}
 <div class="panel col-xs-12{if empty($billingList)} hidden{/if}">
 	<div class="panel-heading"><i class="icon-money"></i> {l s='Recurring information' mod='payline'} - {l s='Payment record #%s' sprintf=[$paymentRecordId] mod='payline'}</div>

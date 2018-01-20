@@ -13,6 +13,7 @@ if (!defined('_PS_VERSION_')) {
 function upgrade_module_2_1_0($module)
 {
     $module->registerHook('actionAdminOrdersListingResultsModifier');
+    $module->createCustomOrderState();
     Db::getInstance()->execute('DROP TABLE IF EXISTS `'._DB_PREFIX_.'payline_token`');
     Db::getInstance()->execute('
     CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.'payline_token` (

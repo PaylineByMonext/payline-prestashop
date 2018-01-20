@@ -20,9 +20,6 @@
 				{/if}
 				{$payline_title|escape:'html':'UTF-8'}{if isset($payline_subtitle) && strlen($payline_subtitle)}&nbsp;&nbsp;<span>{$payline_subtitle|escape:'html':'UTF-8'}</span>{/if}
 			</a>
-			{if $payline_ux_mode == 'lightbox'}
-				{include file="./../front/1.6/lightbox.tpl"}
-			{/if}
 		</p>
 	</div>
 </div>

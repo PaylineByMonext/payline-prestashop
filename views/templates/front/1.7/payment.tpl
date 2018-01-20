@@ -13,7 +13,8 @@
 	<section id="content">
 		<div class="card">
 			<div class="card-header">
-				{l s='Pay with Payline' mod='payline'}
+				{$payline_title}
+				{if isset($payline_subtitle) && strlen($payline_subtitle)}<br />{$payline_subtitle}{/if}
 			</div>
 			<div class="card-block">
 				<h4 class="mb-1">{l s='Total to pay:' mod='payline'}&nbsp;{$cart.totals.total.value}</h4>

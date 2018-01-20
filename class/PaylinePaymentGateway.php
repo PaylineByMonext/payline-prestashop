@@ -17,6 +17,7 @@ class PaylinePaymentGateway
 
     const WEB_PAYMENT_METHOD = 1;
     const RECURRING_PAYMENT_METHOD = 2;
+    const SUBSCRIBE_PAYMENT_METHOD = 3;
 
     /**
      * Response code that does define the transaction approved state
@@ -343,12 +344,17 @@ class PaylinePaymentGateway
         $paymentMode = 'CPT';
         if ($paymentMethod == self::RECURRING_PAYMENT_METHOD) {
             $paymentMode = 'NX';
+        } elseif ($paymentMethod == self::SUBSCRIBE_PAYMENT_METHOD) {
+            // Create first transaction into CPT mode, we will create recurrent wallet on notification/customer return
+            $paymentMode = 'CPT';
         }
         // Payment action
         $paymentAction = '101';
         if ($paymentMethod == self::WEB_PAYMENT_METHOD) {
             $paymentAction = Configuration::get('PAYLINE_WEB_CASH_ACTION');
         } elseif ($paymentMethod == self::RECURRING_PAYMENT_METHOD) {
+            $paymentAction = '101';
+        } elseif ($paymentMethod == self::SUBSCRIBE_PAYMENT_METHOD) {
             $paymentAction = '101';
         }
 
@@ -413,7 +419,7 @@ class PaylinePaymentGateway
             }
         }
         // Set buyer wallet id
-        if (($paymentMethod == self::WEB_PAYMENT_METHOD && Configuration::get('PAYLINE_WEB_CASH_BY_WALLET')) || ($paymentMethod == self::RECURRING_PAYMENT_METHOD && Configuration::get('PAYLINE_RECURRING_BY_WALLET'))) {
+        if (($paymentMethod == self::WEB_PAYMENT_METHOD && Configuration::get('PAYLINE_WEB_CASH_BY_WALLET')) || ($paymentMethod == self::RECURRING_PAYMENT_METHOD && Configuration::get('PAYLINE_RECURRING_BY_WALLET')) || ($paymentMethod == self::SUBSCRIBE_PAYMENT_METHOD)) {
             $params['buyer']['walletId'] = Tools::encrypt((int)$context->customer->id);
         }
         // Customization
@@ -443,6 +449,8 @@ class PaylinePaymentGateway
         $instance->addPrivateData(array('key' => 'id_cart', 'value' => (int)$context->cart->id));
         $instance->addPrivateData(array('key' => 'id_customer', 'value' => (int)$context->customer->id));
         $instance->addPrivateData(array('key' => 'secure_key', 'value' => (string)$context->cart->secure_key));
+        // Add payment method to private data
+        $instance->addPrivateData(array('key' => 'payment_method', 'value' => (int)$paymentMethod));
         $result = $instance->doWebPayment($params);
 
         if (self::isValidResponse($result)) {
@@ -450,6 +458,43 @@ class PaylinePaymentGateway
         }
 
         return array(null, $params);
+    }
+
+    /**
+     * Create a request for subscription
+     * @since 2.3.0
+     * @param array $paymentInfos
+     * @return array
+     */
+    public static function createSubscriptionRequest($paymentInfos)
+    {
+        // Get Payline instance
+        $instance = self::getInstance();
+
+        $paymentInfos['order']['date'] = date('d/m/Y H:i', self::getTimestampFromPaylineDate($paymentInfos['order']['date']));
+        $paymentInfos['payment']['mode'] = 'REC';
+
+        $params = array(
+            'version' => self::API_VERSION,
+            'payment' => $paymentInfos['payment'],
+            'orderRef' => $paymentInfos['order']['ref'],
+            'orderDate' => $paymentInfos['order']['date'],
+            'scheduledDate' => '',
+            'cardInd' => '',
+            'walletId' => $paymentInfos['wallet']['walletId'],
+            'recurring' => PaylinePaymentGateway::getSubscriptionConfiguration($paymentInfos['payment']['amount']),
+            'privateDataList' => $paymentInfos['privateDataList'],
+            'order' => $paymentInfos['order'],
+        );
+
+        // Add private data to the payment request
+        foreach ($paymentInfos['formatedPrivateDataList'] as $k => $v) {
+            $instance->addPrivateData(array('key' => $k, 'value' => $v));
+        }
+
+        $result = $instance->doRecurrentWalletPayment($params);
+
+        return $result;
     }
 
     /**
@@ -494,6 +539,75 @@ class PaylinePaymentGateway
             'amount' => $recurrentAmount,
             'billingLeft' => $billingLeft,
             'billingCycle' => Configuration::get('PAYLINE_RECURRING_PERIODICITY'),
+        );
+    }
+
+    /**
+     * Generate subscribe configuration depending on total to pay
+     * @since 2.2.0
+     * @param float $totalToPay
+     * @return array
+     */
+    public static function getSubscriptionConfiguration($totalToPay)
+    {
+        $startDay = (int)Configuration::get('PAYLINE_SUBSCRIBE_DAY');
+        $subscribePeriodicity = (int)Configuration::get('PAYLINE_SUBSCRIBE_PERIODICITY');
+        $waitPeriod = (int)Configuration::get('PAYLINE_SUBSCRIBE_START_DATE') + 1;
+        // Remove 1 billing because we've already done it into CPT mode
+        $billingLeft = (Configuration::get('PAYLINE_SUBSCRIBE_NUMBER') > 1 ? ((int)Configuration::get('PAYLINE_SUBSCRIBE_NUMBER') - 1) : null);
+        
+        switch ($subscribePeriodicity) {
+            case 10:
+                // Daily
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d day', $waitPeriod)));
+                break;
+            case 20:
+                // Weekly
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d week', $waitPeriod)));
+                break;
+            case 30:
+                // Bimonthly
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d week', $waitPeriod * 2)));
+                break;
+            case 40:
+                // Monthly
+                if ($startDay == 0) {
+                    // Start date is the same day as the initial order
+                    $recurringStartDate = date('d/m/Y', strtotime(sprintf('now + %d month', $waitPeriod)));
+                } else {
+                    // Start date has a specific day, check if we have to go to the next month
+                    $recurringStartDateTimeStamp = strtotime(sprintf('+ %d month ', $waitPeriod), mktime(date("H"), date("i"), date("s"), date("n"), $startDay, date("Y")));
+                    $recurringStartDate = date('d/m/Y', $recurringStartDateTimeStamp);
+                }
+                break;
+            case 50:
+                // Two quaterly
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d month', $waitPeriod * 2)));
+                break;
+            case 60:
+                // Quaterly
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d month', $waitPeriod * 3)));
+                break;
+            case 70:
+                // Semiannual
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d month', $waitPeriod * 6)));
+                break;
+            case 80:
+                // Annual
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d year', $waitPeriod)));
+                break;
+            case 90:
+                // Biannual
+                $recurringStartDate  = date('d/m/Y', strtotime(sprintf('now + %d year', $waitPeriod * 2)));
+                break;
+        }
+        return array(
+            'firstAmount' => null,
+            'amount' => $totalToPay,
+            'billingLeft' => $billingLeft,
+            'billingCycle' => Configuration::get('PAYLINE_SUBSCRIBE_PERIODICITY'),
+            'billingDay' => Configuration::get('PAYLINE_SUBSCRIBE_DAY') ? Configuration::get('PAYLINE_SUBSCRIBE_DAY') : date('d'),
+            'startDate' => $recurringStartDate,
         );
     }
 
@@ -668,6 +782,26 @@ class PaylinePaymentGateway
     }
 
     /**
+     * Disable payment record
+     * @since 2.2.0
+     * @param string $contractNumber
+     * @param string $paymentRecordId
+     * @return array
+     */
+    public static function disablePaymentRecord($contractNumber, $paymentRecordId)
+    {
+        $instance = self::getInstance();
+        $params = array(
+            'version' => self::API_VERSION,
+            'contractNumber' => $contractNumber,
+            'paymentRecordId' => $paymentRecordId,
+        );
+        $result = $instance->disablePaymentRecord($params);
+
+        return $result;
+    }
+
+    /**
      * Return number of validated transaction for a recurring payment
      * @since 2.1.0
      * @param array $paymentRecord
@@ -785,6 +919,28 @@ class PaylinePaymentGateway
         $result = $instance->doReset($params);
 
         return $result;
+    }
+
+    /**
+     * Cancel a transaction (refund or reset depending on paymentInfos)
+     * @since 2.3.0
+     * @param array $paymentInfos
+     * @param string $comment
+     * @return bool
+     */
+    public static function cancelTransaction($paymentInfos, $comment = null)
+    {
+        if ($paymentInfos['payment']['action'] == 100) {
+            // Cancel author
+            $resetTransaction = PaylinePaymentGateway::resetTransaction($paymentInfos['transaction']['id'], null, $comment);
+            $validResponse = PaylinePaymentGateway::isValidResponse($resetTransaction, array('02601', '02602'));
+        } else {
+            // Refund
+            $refundTransaction = PaylinePaymentGateway::refundTransaction($paymentInfos['transaction']['id'], null, $comment);
+            $validResponse = PaylinePaymentGateway::isValidResponse($refundTransaction);
+        }
+
+        return $validResponse;
     }
 
     /**

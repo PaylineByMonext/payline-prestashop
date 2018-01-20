@@ -6,8 +6,10 @@
  */
 
 #payline-payment-container p.payment_module a {
-	background: url(../img/logo.png) 15px 15px no-repeat #fbfbfb;
-	padding-left: 210px;
+	padding-left: 10px;
+}
+#payline-payment-container p.payment_module a > img:last-child {
+	padding-right: 10px;
 }
 
 #payline-payment-container p.payment_module a:after {

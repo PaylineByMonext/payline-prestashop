@@ -40,6 +40,34 @@
 			</li>
 		{/foreach}
 		</ol>
+	{elseif $input.type == 'product-selector'}
+		<div class="form-group{if isset($input.form_group_class)}{$input.form_group_class|escape:'html':'UTF-8'}{/if}">
+			<div class="col-lg-5">
+				<input type="hidden" name="{$input.name|escape:'html':'UTF-8'}" id="{$input.name|escape:'html':'UTF-8'}" value="{foreach $input.values as $product}{$product.id|intval},{/foreach}" />
+				<input type="hidden" name="{$input.name|escape:'html':'UTF-8'}_PRODUCTS" id="{$input.name|escape:'html':'UTF-8'}_PRODUCTS" value="{foreach $input.values as $product}{$product.name|escape:'html':'UTF-8'}¤{/foreach}" />
+				<div id="ajax_choose_product">
+					<div class="input-group">
+						<input type="text" id="product_autocomplete_input" name="product_autocomplete_input" placeholder="{l s='Start typing an ID, reference, or product name' mod='payline'}" />
+						<span class="input-group-addon"><i class="icon-search"></i></span>
+					</div>
+				</div>
+
+				<div id="{$input.name|escape:'html':'UTF-8'}_CONTAINER">
+					{foreach $input.values as $product}
+						<div id="{$input.name|escape:'html':'UTF-8'}-PRODUCT-{$product.id|intval}" class="form-control-static">
+							<button type="button" class="btn btn-default" name="{$product.id|intval}" onclick="payline_delProduct({$product.id|intval})">
+								<i class="icon-remove text-danger"></i>
+							</button>
+							{if (version_compare($smarty.const._PS_VERSION_, '1.7.0.0', '>='))}
+								<img src="../img/tmp/product_mini_{$product.id_image|intval}.jpg" />{$product.name|escape:'html':'UTF-8'}
+							{else}
+								<img src="../img/tmp/product_mini_{$product.id|intval}_{$id_shop|intval}.jpg" />{$product.name|escape:'html':'UTF-8'}
+							{/if}
+						</div>
+					{/foreach}
+				</div>
+			</div>
+		</div>
 	{else}
 		{$smarty.block.parent}
 	{/if}

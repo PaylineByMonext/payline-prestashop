@@ -7,11 +7,11 @@
 *
 *}
 
-{capture name=path}{l s='Pay with Payline' mod='payline'}{if isset($payline_title) && strlen($payline_title)} - {$payline_title|escape:'html':'UTF-8'}{/if}{/capture}
+{capture name=path}{$payline_title|escape:'html':'UTF-8'}{/capture}
 
 {include file="$tpl_dir./errors.tpl"}
 
-<h1 class="page-heading">{l s='Pay with Payline' mod='payline'}{if isset($payline_title) && strlen($payline_title)} - {$payline_title|escape:'html':'UTF-8'}{/if}{if isset($payline_subtitle) && strlen($payline_subtitle)}<br />{$payline_subtitle|escape:'html':'UTF-8'}{/if}</h1>
+<h1 class="page-heading">{$payline_title|escape:'html':'UTF-8'}{if isset($payline_subtitle) && strlen($payline_subtitle)}<br />{$payline_subtitle|escape:'html':'UTF-8'}{/if}</h1>
 
 <div class="block-center">
 	<h4>{l s='Total to pay:' mod='payline'}&nbsp;{$payline_first_amount|escape:'html':'UTF-8'}</h4>

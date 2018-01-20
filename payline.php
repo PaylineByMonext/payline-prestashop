@@ -78,6 +78,7 @@ class payline extends PaymentModule
     // Errors constants
     const INVALID_AMOUNT = 1;
     const INVALID_CART_ID = 2;
+    const SUBSCRIPTION_ERROR = 3;
 
     /**
      * Module __construct
@@ -89,7 +90,7 @@ class payline extends PaymentModule
         $this->name = 'payline';
         $this->tab = 'payments_gateways';
         $this->module_key = '';
-        $this->version = '2.1.0';
+        $this->version = '2.2.0';
         $this->author = 'Monext';
         $this->need_instance = true;
 
@@ -119,7 +120,9 @@ class payline extends PaymentModule
         CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.'payline_token` (
             `id_order` int(10) UNSIGNED NOT NULL,
             `id_cart` int(10) UNSIGNED NOT NULL,
-            `token` VARCHAR(255) NOT NULL,
+            `token` varchar(255) NULL,
+            `payment_record_id` varchar(12),
+            `transaction_id` varchar(50),
             UNIQUE `id_order` (`id_order`),
             UNIQUE `id_cart` (`id_cart`)
         ) ENGINE='._MYSQL_ENGINE_.' CHARSET=utf8');
@@ -132,7 +135,7 @@ class payline extends PaymentModule
      * @since 2.0.0
      * @return bool
      */
-    protected function createCustomOrderState()
+    public function createCustomOrderState()
     {
         foreach ($this->customOrderStateList as $configurationKey => $customOrderState) {
             $idOrderState = Configuration::get($configurationKey);
@@ -226,6 +229,7 @@ class payline extends PaymentModule
             || !$this->registerHook('displayBackOfficeHeader')
             || !$this->registerHook('displayHeader')
             || !$this->registerHook('displayAdminOrderLeft')
+            || !$this->registerHook('displayCustomerAccount')
             || !$this->registerHook('actionAdminOrdersListingResultsModifier')
             || !$this->registerHook('actionObjectOrderSlipAddAfter')
             || !$this->registerHook('actionOrderStatusUpdate')
@@ -261,6 +265,10 @@ class payline extends PaymentModule
                 }
             }
             $this->context->controller->errors[] = $this->l('Please try to use another payment method or another credit card.');
+        }
+        // Add front.css on OPC
+        if ($this->isPaymentAvailable() && version_compare(_PS_VERSION_, '1.7.0.0', '<') && $this->context->controller instanceof OrderOpcController) {
+            $this->context->controller->addCSS($this->_path.'views/css/front.css');
         }
     }
 
@@ -490,7 +498,7 @@ class payline extends PaymentModule
                     $order = new Order((int)$orderListRow['id_order']);
                     if (Validate::isLoadedObject($order) && $order->module == 'payline') {
                         // Retrieve original transaction via token
-                        $token = PaylineToken::getByIdOrder($order->id);
+                        $token = PaylineToken::getTokenByIdOrder($order->id);
                         if (!empty($token)) {
                             $originalTransaction = PaylinePaymentGateway::getPaymentInformations($token);
                             if (!empty($originalTransaction['paymentRecordId']) && !empty($originalTransaction['payment']['mode']) &&
@@ -514,6 +522,28 @@ class payline extends PaymentModule
     }
 
     /**
+     * Display subscribe information into customer account
+     * @since 2.2.0
+     * @param array $params
+     * @return string
+     */
+    public function hookDisplayCustomerAccount($params)
+    {
+        $output = '';
+
+        $this->context->smarty->assign(array(
+            'subscriptionControllerLink' => $this->context->link->getModuleLink('payline', 'subscriptions', array(), true),
+        ));
+        if (version_compare(_PS_VERSION_, '1.7.0.0', '>=')) {
+            $output .= $this->context->smarty->fetch($this->local_path.'views/templates/hook/1.7/customer_account.tpl');
+        } else {
+            $output .= $this->display(__FILE__, 'customer_account.tpl');
+        }
+
+        return $output;
+    }
+
+    /**
      * Display payment result on confirmation page
      * @since 2.0.0
      * @param array $params
@@ -531,20 +561,52 @@ class payline extends PaymentModule
             $order = new Order($params['id_order']);
             if (Validate::isLoadedObject($order) && $order->module == 'payline') {
                 // Retrieve original transaction via token
-                $token = PaylineToken::getByIdOrder($order->id);
+                $token = PaylineToken::getTokenByIdOrder($order->id);
                 if (!empty($token)) {
                     $originalTransaction = PaylinePaymentGateway::getPaymentInformations($token);
-                    if (!empty($originalTransaction['payment']['mode']) && $originalTransaction['payment']['mode'] == 'NX') {
-                        if (isset($originalTransaction['billingRecordList']) && is_array($originalTransaction['billingRecordList']) && isset($originalTransaction['billingRecordList']['billingRecord']) && is_array($originalTransaction['billingRecordList']['billingRecord'])) {
+                } else {
+                    $idTransaction = PaylineToken::getIdTransactionByIdOrder($order->id);
+                    if (!empty($idTransaction)) {
+                        $originalTransaction = PaylinePaymentGateway::getTransactionInformations($idTransaction);
+                    }
+                }
+                if (!empty($originalTransaction['formatedPrivateDataList']['payment_method']) && $originalTransaction['formatedPrivateDataList']['payment_method'] == PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD) {
+                    // Subscription, get payment recordId
+                    $paymentRecordId = PaylineToken::getPaymentRecordIdByIdOrder($order->id);
+                    if (!empty($paymentRecordId)) {
+                        // Get payment record
+                        $paymentRecord = PaylinePaymentGateway::getPaymentRecord($originalTransaction['payment']['contractNumber'], $paymentRecordId);
+                        if (PaylinePaymentGateway::isValidResponse($paymentRecord, array('02500'))) {
+                            // Add Order ID to each rows
+                            foreach ($paymentRecord['billingRecordList']['billingRecord'] as &$billingRecord) {
+                                if (isset($billingRecord['transaction']['id'])) {
+                                    $linkedIdOrder = PaylineToken::getIdOrderByIdTransaction($billingRecord['transaction']['id']);
+                                    if (!empty($linkedIdOrder)) {
+                                        $billingRecord['pl_linkedIdOrder'] = $linkedIdOrder;
+                                        $billingRecord['pl_linkToOrder'] = $this->context->link->getAdminLink('AdminOrders') . '&id_order=' . $linkedIdOrder . '&vieworder';
+                                    }
+                                }
+                            }
+
                             // Display all records
                             $this->context->smarty->assign(array(
                                 'id_order' => (int)$params['id_order'],
-                                'billingList' => $originalTransaction['billingRecordList']['billingRecord'],
-                                'paymentRecordId' => $originalTransaction['paymentRecordId'],
+                                'billingListRec' => $paymentRecord['billingRecordList']['billingRecord'],
+                                'paymentRecordId' => $paymentRecordId,
                             ));
                         }
                     }
+                } elseif (!empty($originalTransaction['payment']['mode']) && $originalTransaction['payment']['mode'] == 'NX') {
+                    if (isset($originalTransaction['billingRecordList']) && is_array($originalTransaction['billingRecordList']) && isset($originalTransaction['billingRecordList']['billingRecord']) && is_array($originalTransaction['billingRecordList']['billingRecord'])) {
+                        // Display all records
+                        $this->context->smarty->assign(array(
+                            'id_order' => (int)$params['id_order'],
+                            'billingList' => $originalTransaction['billingRecordList']['billingRecord'],
+                            'paymentRecordId' => $originalTransaction['paymentRecordId'],
+                        ));
+                    }
                 }
+
                 // Retrieve order payments
                 $orderPayments = OrderPayment::getByOrderReference($order->reference);
                 $sameTransactionID = false;
@@ -722,13 +784,31 @@ class payline extends PaymentModule
         }
 
         $paymentMethodList = array();
+        // Assign to template enabled cards/contracts
+        $currentPos = Configuration::get('PAYLINE_POS');
+        $enabledContracts = PaylinePaymentGateway::getEnabledContracts();
+        $contractsList = PaylinePaymentGateway::getContractsByPosLabel($currentPos, $enabledContracts);
+        $this->smarty->assign(array(
+            'payline_contracts' => $contractsList,
+        ));
 
         // Web payment
         if (Configuration::get('PAYLINE_WEB_CASH_ENABLE')) {
             $uxMode = Configuration::get('PAYLINE_WEB_CASH_UX');
 
             $webCash = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
-            $webCash->setModuleName($this->name)->setCallToActionText($this->l('Pay by Payline'));
+            $webCashTitle = Configuration::get('PAYLINE_WEB_CASH_TITLE', $this->context->language->id);
+            $webCashSubTitle = Configuration::get('PAYLINE_WEB_CASH_SUBTITLE', $this->context->language->id);
+            if (!strlen($webCashTitle)) {
+                $webCashTitle = $this->l('Simple payment');
+            }
+            $webCash->setModuleName($this->name)->setCallToActionText($webCashTitle);
+            // Add additionnal information text
+            $this->smarty->assign(array(
+                'payline_title' => $webCashTitle,
+                'payline_subtitle' => $webCashSubTitle,
+            ));
+            $webCash->setAdditionalInformation($this->fetch('module:payline/views/templates/front/1.7/payment_additional_information.tpl'));
 
             if ($uxMode == 'lightbox') {
                 list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::WEB_PAYMENT_METHOD);
@@ -737,6 +817,8 @@ class payline extends PaymentModule
                         'payline_token' => $paymentRequest['token'],
                         'payline_ux_mode' => Configuration::get('PAYLINE_WEB_CASH_UX'),
                         'payline_assets' => PaylinePaymentGateway::getAssetsToRegister(),
+                        'payline_title' => $webCashTitle,
+                        'payline_subtitle' => $webCashSubTitle,
                     ));
                     $webCash->setAction('javascript:Payline.Api.init()');
                     $webCash->setAdditionalInformation($this->fetch('module:payline/views/templates/front/1.7/lightbox.tpl'));
@@ -764,17 +846,18 @@ class payline extends PaymentModule
             $uxMode = Configuration::get('PAYLINE_RECURRING_UX');
 
             $recurringPayment = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
-            $callToActionText = $this->l('Pay by Payline');
             $recurringTitle = Configuration::get('PAYLINE_RECURRING_TITLE', $this->context->language->id);
             $recurringSubTitle = Configuration::get('PAYLINE_RECURRING_SUBTITLE', $this->context->language->id);
-            if (strlen($recurringTitle)) {
-                $callToActionText .= ' - ' . $recurringTitle;
+            if (!strlen($recurringTitle)) {
+                $recurringTitle = $this->l('Nx payment');
             }
-            $recurringPayment->setModuleName($this->name)->setCallToActionText($callToActionText);
+            $recurringPayment->setModuleName($this->name)->setCallToActionText($recurringTitle);
             // Add additionnal information text
-            if (strlen($recurringSubTitle)) {
-                $recurringPayment->setAdditionalInformation($recurringSubTitle);
-            }
+            $this->smarty->assign(array(
+                'payline_title' => $recurringTitle,
+                'payline_subtitle' => $recurringSubTitle,
+            ));
+            $recurringPayment->setAdditionalInformation($this->fetch('module:payline/views/templates/front/1.7/payment_additional_information.tpl'));
 
             if ($uxMode == 'lightbox') {
                 list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::RECURRING_PAYMENT_METHOD);
@@ -807,6 +890,96 @@ class payline extends PaymentModule
             }
         }
 
+        // Subscribe payment
+        if (Configuration::get('PAYLINE_SUBSCRIBE_ENABLE')) {
+            $subscribePayment = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
+            $subscribeTitle = Configuration::get('PAYLINE_SUBSCRIBE_TITLE', $this->context->language->id);
+            $subscribeSubTitle = Configuration::get('PAYLINE_SUBSCRIBE_SUBTITLE', $this->context->language->id);
+            if (!strlen($subscribeTitle)) {
+                $subscribeTitle = $this->l('Recurring payment');
+            }
+            $subscribePayment->setModuleName($this->name)->setCallToActionText($subscribeTitle);
+            // Add additionnal information text
+            $this->smarty->assign(array(
+                'payline_title' => $subscribeTitle,
+                'payline_subtitle' => $subscribeSubTitle,
+            ));
+            $subscribePayment->setAdditionalInformation($this->fetch('module:payline/views/templates/front/1.7/payment_additional_information.tpl'));
+
+            list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD);
+            if (!empty($paymentRequest['redirectURL'])) {
+                $subscribePayment->setAction($paymentRequest['redirectURL']);
+            } else {
+                $subscribePayment = null;
+            }
+
+            if ($subscribePayment !== null) {
+                // Retrieve exclusive product list
+                $exclusiveProductList = $this->getSubscribeProductList();
+
+                if (!Configuration::get('PAYLINE_SUBSCRIBE_EXCLUSIVE')) {
+                    // Non-exclusive method, check if products in cart are correct and eligible
+                    if (is_array($exclusiveProductList) && sizeof($exclusiveProductList)) {
+                        $cartProductList = $this->context->cart->getProducts();
+                        if (is_array($cartProductList)) {
+                            foreach ($cartProductList as $cartProduct) {
+                                // We have to disable this method, no product are eligible
+                                if (!in_array($cartProduct['id_product'], $exclusiveProductList)) {
+                                    $subscribePayment = null;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if ($subscribePayment !== null) {
+                        $paymentMethodList[] = $subscribePayment;
+                    }
+                } else {
+                    // Exclusive method, check if products in cart are correct
+                    $cartProductList = $this->context->cart->getProducts();
+                    $cartIntegrity = false;
+                    $cartFullIntegrity = true;
+                    $breakingIntegrityList = array();
+                    // We have at least, one product OK
+                    if (is_array($cartProductList)) {
+                        foreach ($cartProductList as $cartProduct) {
+                            if (in_array($cartProduct['id_product'], $exclusiveProductList)) {
+                                $cartIntegrity = true;
+                            } else {
+                                $cartFullIntegrity = false;
+                                $breakingIntegrityList[] = $cartProduct['id_product'];
+                            }
+                        }
+                    }
+
+                    if (!$cartIntegrity) {
+                        // We have to disable this method, no product are eligible
+                        $subscribePayment = null;
+                    } elseif (!$cartFullIntegrity) {
+                        // We have to disable payment via Payline, wrong cart content
+                        $breakingProductList = array();
+                        foreach ($breakingIntegrityList as $idProduct) {
+                            $product = new Product($idProduct, false, $this->context->cookie->id_lang);
+                            $breakingProductList[] = $product->name;
+                        }
+
+                        $this->smarty->assign(array(
+                            'paylineBreakingProductList' => $breakingProductList
+                        ));
+
+                        $subscribePayment->setAdditionalInformation($this->fetch('module:payline/views/templates/front/1.7/payment_sub_error.tpl'));
+                        if ($subscribePayment !== null) {
+                            $paymentMethodList[] = $subscribePayment;
+                        }
+                    } elseif ($cartIntegrity && $cartFullIntegrity) {
+                        // We have to hide any other methods...
+                        $paymentMethodList = array($subscribePayment);
+                    }
+                }
+            }
+        }
+
         return $paymentMethodList;
     }
 
@@ -824,15 +997,30 @@ class payline extends PaymentModule
             return;
         }
 
+        // Assign to template enabled cards/contracts
+        $currentPos = Configuration::get('PAYLINE_POS');
+        $enabledContracts = PaylinePaymentGateway::getEnabledContracts();
+        $contractsList = PaylinePaymentGateway::getContractsByPosLabel($currentPos, $enabledContracts);
+        $this->smarty->assign(array(
+            'payline_contracts' => $contractsList,
+        ));
+
         $this->context->controller->addCSS($this->_path.'views/css/front.css');
 
         $paymentReturn = '';
 
         if (Configuration::get('PAYLINE_WEB_CASH_ENABLE')) {
             $uxMode = Configuration::get('PAYLINE_WEB_CASH_UX');
+            $webCashTitle = Configuration::get('PAYLINE_WEB_CASH_TITLE', $this->context->language->id);
+            if (!strlen($webCashTitle)) {
+                $webCashTitle = $this->l('Simple payment');
+            }
+            $webCashSubTitle = Configuration::get('PAYLINE_WEB_CASH_SUBTITLE', $this->context->language->id);
 
             $this->smarty->assign(array(
                 'payline_ux_mode' => Configuration::get('PAYLINE_WEB_CASH_UX'),
+                'payline_title' => $webCashTitle,
+                'payline_subtitle' => $webCashSubTitle,
             ));
 
             if ($uxMode == 'lightbox') {
@@ -869,6 +1057,9 @@ class payline extends PaymentModule
         if (Configuration::get('PAYLINE_RECURRING_ENABLE') && (!Configuration::get('PAYLINE_RECURRING_TRIGGER') || ($this->context->cart->getOrderTotal() > Configuration::get('PAYLINE_RECURRING_TRIGGER')))) {
             $uxMode = Configuration::get('PAYLINE_RECURRING_UX');
             $recurringTitle = Configuration::get('PAYLINE_RECURRING_TITLE', $this->context->language->id);
+            if (!strlen($recurringTitle)) {
+                $recurringTitle = $this->l('Nx payment');
+            }
             $recurringSubTitle = Configuration::get('PAYLINE_RECURRING_SUBTITLE', $this->context->language->id);
 
             $this->smarty->assign(array(
@@ -905,6 +1096,92 @@ class payline extends PaymentModule
             }
         }
 
+        // Subscribe payment
+        if (Configuration::get('PAYLINE_SUBSCRIBE_ENABLE')) {
+            $subscribeTitle = Configuration::get('PAYLINE_SUBSCRIBE_TITLE', $this->context->language->id);
+            if (!strlen($subscribeTitle)) {
+                $subscribeTitle = $this->l('Recurring payment');
+            }
+            $subscribeSubTitle = Configuration::get('PAYLINE_SUBSCRIBE_SUBTITLE', $this->context->language->id);
+
+            $this->smarty->assign(array(
+                'payline_title' => $subscribeTitle,
+                'payline_subtitle' => $subscribeSubTitle,
+            ));
+
+            list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD);
+            if (!empty($paymentRequest['redirectURL'])) {
+                $this->smarty->assign(array(
+                    'payline_token' => $paymentRequest['token'],
+                    'payline_href' => $paymentRequest['redirectURL'],
+                ));
+
+                // Retrieve exclusive product list
+                $exclusiveProductList = $this->getSubscribeProductList();
+
+                if (!Configuration::get('PAYLINE_SUBSCRIBE_EXCLUSIVE')) {
+                    // Non-exclusive method, check if products in cart are correct and eligible
+                    $cartIntegrity = true;
+                    if (is_array($exclusiveProductList) && sizeof($exclusiveProductList)) {
+                        $cartProductList = $this->context->cart->getProducts();
+                        if (is_array($cartProductList)) {
+                            foreach ($cartProductList as $cartProduct) {
+                                // We have to disable this method, no product are eligible
+                                if (!in_array($cartProduct['id_product'], $exclusiveProductList)) {
+                                    $cartIntegrity = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if ($cartIntegrity) {
+                        $paymentReturn .= $this->display(__FILE__, 'views/templates/hook/payment_sub.tpl');
+                    }
+                } else {
+                    // Exclusive method, check if products in cart are correct
+                    $cartProductList = $this->context->cart->getProducts();
+                    $cartIntegrity = false;
+                    $cartFullIntegrity = true;
+                    $breakingIntegrityList = array();
+                    // We have at least, one product OK
+                    if (is_array($cartProductList)) {
+                        foreach ($cartProductList as $cartProduct) {
+                            if (in_array($cartProduct['id_product'], $exclusiveProductList)) {
+                                $cartIntegrity = true;
+                            } else {
+                                $cartFullIntegrity = false;
+                                $breakingIntegrityList[] = $cartProduct['id_product'];
+                            }
+                        }
+                    }
+
+                    if (!$cartIntegrity) {
+                        // We have to disable this method, no product are eligible
+                        // Nothing to do here
+                    } elseif (!$cartFullIntegrity) {
+                        // We have to disable payment via Payline, wrong cart content
+                        $breakingProductList = array();
+                        foreach ($breakingIntegrityList as $idProduct) {
+                            $product = new Product($idProduct, false, $this->context->cookie->id_lang);
+                            $breakingProductList[] = $product->name;
+                        }
+
+                        // Reset payment method list
+                        $paymentReturn = '';
+
+                        $this->context->controller->errors[] = $this->l('Your cart contains mixed products (recurring products and classic products).');
+                        $this->context->controller->errors[] = $this->l('In order to be able to pay with Payline, please remove these products:');
+                        foreach ($breakingProductList as $productName) {
+                            $this->context->controller->errors[] = $productName;
+                        }
+                    } elseif ($cartIntegrity && $cartFullIntegrity) {
+                        // We have to hide any other methods...
+                        $paymentReturn = $this->display(__FILE__, 'views/templates/hook/payment_sub.tpl');
+                    }
+                }
+            }
+        }
+
         return $paymentReturn;
     }
 
@@ -924,7 +1201,7 @@ class payline extends PaymentModule
             return false;
         }
         // Check if at least one payment method is available
-        if ($paymentMethod == null && !Configuration::get('PAYLINE_WEB_CASH_ENABLE') && !Configuration::get('PAYLINE_RECURRING_ENABLE')) {
+        if ($paymentMethod == null && !Configuration::get('PAYLINE_WEB_CASH_ENABLE') && !Configuration::get('PAYLINE_RECURRING_ENABLE') && !Configuration::get('PAYLINE_SUBSCRIBE_ENABLE')) {
             return false;
         }
         // Check if web payment method is available
@@ -933,6 +1210,10 @@ class payline extends PaymentModule
         }
         // Check if recurring payment method is available
         if ($paymentMethod == PaylinePaymentGateway::RECURRING_PAYMENT_METHOD && !Configuration::get('PAYLINE_RECURRING_ENABLE')) {
+            return false;
+        }
+        // Check if subscribe payment method is available
+        if ($paymentMethod == PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD && !Configuration::get('PAYLINE_SUBSCRIBE_ENABLE')) {
             return false;
         }
         // Check if current cart currency is allowed
@@ -1052,6 +1333,8 @@ class payline extends PaymentModule
                 $activeTab = 'web-payment';
             } elseif (Tools::isSubmit('submitPaylinerecurring-web-payment')) {
                 $activeTab = 'recurring-web-payment';
+            } elseif (Tools::isSubmit('submitPaylinesubscribe-payment')) {
+                $activeTab = 'subscribe-payment';
             } elseif (Tools::isSubmit('submitPaylinepayline')) {
                 $activeTab = 'payline';
             } elseif (Tools::isSubmit('submitPaylinecontracts')) {
@@ -1067,13 +1350,16 @@ class payline extends PaymentModule
             }
 
             // Add alert if all contracts are disabled
-            $paylineCheckNoEnabledContract = ((Configuration::get('PAYLINE_WEB_CASH_ENABLE') || Configuration::get('PAYLINE_RECURRING_ENABLE')) && !sizeof(PaylinePaymentGateway::getEnabledContracts()));
+            $paylineCheckNoEnabledContract = ((Configuration::get('PAYLINE_WEB_CASH_ENABLE') || Configuration::get('PAYLINE_RECURRING_ENABLE') || Configuration::get('PAYLINE_SUBSCRIBE_ENABLE')) && !sizeof(PaylinePaymentGateway::getEnabledContracts()));
             if ($paylineCheckNoEnabledContract) {
                 $this->context->controller->warnings[] = $this->l('You must enable at least one contract.');
                 $activeTab = 'contracts';
             }
         }
 
+        $this->context->smarty->assign('payline_id_shop', (int)$this->context->shop->id);
+        $this->context->smarty->assign('payline_is_ps16', version_compare(_PS_VERSION_, '1.7.0.0', '<'));
+        $this->context->smarty->assign('payline_is_ps17', version_compare(_PS_VERSION_, '1.7.0.0', '>='));
         $this->context->smarty->assign('payline_active_tab', $activeTab);
         $this->context->smarty->assign('payline_api_status', Configuration::get('PAYLINE_API_STATUS'));
         $this->context->smarty->assign('payline_contracts_errors', $paylineCheckNoEnabledContract);
@@ -1081,6 +1367,7 @@ class payline extends PaymentModule
         $this->context->smarty->assign('payline_credentials_configuration', $this->renderForm('payline'));
         $this->context->smarty->assign('payline_web_payment_configuration', $this->renderForm('web-payment'));
         $this->context->smarty->assign('payline_recurring_payment_configuration', $this->renderForm('recurring-web-payment'));
+        $this->context->smarty->assign('payline_subscribe_payment_configuration', $this->renderForm('subscribe-payment'));
         $this->context->smarty->assign('payline_contracts_configuration', $this->renderForm('contracts'));
         return $this->context->smarty->fetch($this->local_path.'views/templates/admin/configure.tpl');
     }
@@ -1110,6 +1397,7 @@ class payline extends PaymentModule
             'fields_value' => $this->getConfigFormValues($tabName),
             'languages' => $this->context->controller->getLanguages(),
             'id_language' => $this->context->language->id,
+            'id_shop' => $this->context->shop->id,
         );
 
         return $helper->generateForm(array($this->getConfigForm($tabName)));
@@ -1208,17 +1496,20 @@ class payline extends PaymentModule
             }
 
             return $contractsListForSelect;
-        } elseif ($listName == 'recurring-periods') {
-            $recurrinPeriods = array();
+        } elseif ($listName == 'recurring-periods' || $listName == 'subscribe-periods') {
+            $recurringPeriods = array();
+            if ($listName == 'subscribe-periods') {
+                $recurringPeriods[] = array('value' => '0', 'name' => $this->l('No limit'));
+            }
             for ($period = 2; $period <= 99; $period++) {
-                $recurrinPeriods[] = array(
+                $recurringPeriods[] = array(
                     'value' => $period,
                     'name' => $period,
                 );
             }
 
-            return $recurrinPeriods;
-        } elseif ($listName == 'recurring-frequency') {
+            return $recurringPeriods;
+        } elseif ($listName == 'recurring-frequency' || $listName == 'subscribe-frequency') {
             return array(
                 array('value' => '10', 'name' => $this->l('Daily')),
                 array('value' => '20', 'name' => $this->l('Weekly')),
@@ -1240,6 +1531,22 @@ class payline extends PaymentModule
             }
 
             return $periodWeight;
+        } elseif ($listName == 'subscribe-start-date') {
+            return array(
+                array('value' => 0, 'name' => $this->l('Due day')),
+                array('value' => 1, 'name' => $this->l('After a period')),
+                array('value' => 2, 'name' => $this->l('After two periods')),
+            );
+        } elseif ($listName == 'subscribe-days') {
+            $subscribeDays = array();
+            for ($day = 0; $day <= 31; $day++) {
+                $subscribeDays[] = array(
+                    'value' => $day,
+                    'name' => $day,
+                );
+            }
+
+            return $subscribeDays;
         }
     }
 
@@ -1329,7 +1636,7 @@ class payline extends PaymentModule
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_HOST',
                             'label' => $this->l('Host'),
-                            'placeholder' => '127.128.129.130',
+                            'placeholder' => '',
                         ),
                         array(
                             'type' => 'text',
@@ -1337,21 +1644,21 @@ class payline extends PaymentModule
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_PORT',
                             'label' => $this->l('Port'),
-                            'placeholder' => '8080',
+                            'placeholder' => '',
                         ),
                         array(
                             'type' => 'text',
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_LOGIN',
                             'label' => $this->l('Login'),
-                            'placeholder' => 'proxy-login',
+                            'placeholder' => '',
                         ),
                         array(
                             'type' => 'text',
                             'desc' => '',
                             'name' => 'PAYLINE_PROXY_PASSWORD',
                             'label' => $this->l('Password'),
-                            'placeholder' => 'proxy-password',
+                            'placeholder' => '',
                         ),
                     ),
                     'submit' => array(
@@ -1375,7 +1682,7 @@ class payline extends PaymentModule
                         ),
                         array(
                             'type' => 'switch',
-                            'label' => $this->l('Enable Web Payment'),
+                            'label' => $this->l('Enable simple payment'),
                             'name' => 'PAYLINE_WEB_CASH_ENABLE',
                             'is_bool' => true,
                             'desc' => $this->l('choose wether to display Payline simple payment in your checkout or not'),
@@ -1391,6 +1698,24 @@ class payline extends PaymentModule
                                     'label' => $this->l('Disabled'),
                                 )
                             ),
+                        ),
+                        array(
+                            'form_group_class' => ($this->langConfigHaveAtLeastOneEmptyValue('PAYLINE_WEB_CASH_TITLE') ? 'has-error' : ''),
+                            'lang' => true,
+                            'required' => true,
+                            'type' => 'text',
+                            'name' => 'PAYLINE_WEB_CASH_TITLE',
+                            'label' => $this->l('Title'),
+                            'placeholder' => '',
+                            'maxlength' => 255,
+                        ),
+                        array(
+                            'lang' => true,
+                            'type' => 'text',
+                            'name' => 'PAYLINE_WEB_CASH_SUBTITLE',
+                            'label' => $this->l('Subtitle'),
+                            'placeholder' => '',
+                            'maxlength' => 255,
                         ),
                         array(
                             'type' => 'select',
@@ -1463,19 +1788,19 @@ class payline extends PaymentModule
             return array(
                 'form' => array(
                     'legend' => array(
-                    'title' => $this->l('Recurring web payment'),
+                    'title' => $this->l('Nx payment'),
                     'icon' => 'icon-cogs',
                     ),
                     'input' => array(
                         array(
                             'type' => 'html',
                             'name' => '
-                            <h2>'.$this->l('Recurring payment').'</h2>
+                            <h2>'.$this->l('Nx payment').'</h2>
                             <p>'.$this->l('Contracts activated through contracts configuration menu are displayed in the checkout. All payment information is filled on our secure user interface.').'</p>',
                         ),
                         array(
                             'type' => 'switch',
-                            'label' => $this->l('Enable Recurring Web Payment'),
+                            'label' => $this->l('Enable Nx payment'),
                             'name' => 'PAYLINE_RECURRING_ENABLE',
                             'is_bool' => true,
                             'desc' => $this->l('choose wether to display Payline recurring payment in your checkout or not'),
@@ -1493,7 +1818,9 @@ class payline extends PaymentModule
                             ),
                         ),
                         array(
+                            'form_group_class' => ($this->langConfigHaveAtLeastOneEmptyValue('PAYLINE_RECURRING_TITLE') ? 'has-error' : ''),
                             'lang' => true,
+                            'required' => true,
                             'type' => 'text',
                             'name' => 'PAYLINE_RECURRING_TITLE',
                             'label' => $this->l('Title'),
@@ -1591,6 +1918,146 @@ class payline extends PaymentModule
                     ),
                 ),
             );
+        } elseif ($tabName == 'subscribe-payment') {
+            $subscribeProductList = array();
+            $subscribeProductListId = $this->getSubscribeProductList();
+            if (!empty($subscribeProductListId)) {
+                foreach ($subscribeProductListId as $idProduct) {
+                    if (empty($idProduct)) {
+                        continue;
+                    }
+                    $product = new Product($idProduct, false, $this->context->employee->id_lang);
+                    if (Validate::isLoadedObject($product)) {
+                        $subscribeProductList[] = array(
+                            'id' => (int)$product->id,
+                            'name' => $product->name . " (ref: " . $product->reference . ")",
+                            'id_image' => $product->getCoverWs(),
+                        );
+                    }
+                }
+            }
+            return array(
+                'form' => array(
+                    'legend' => array(
+                    'title' => $this->l('Recurring payment'),
+                    'icon' => 'icon-cogs',
+                    ),
+                    'input' => array(
+                        array(
+                            'type' => 'html',
+                            'name' => '
+                            <h2>'.$this->l('Recurring payment').'</h2>
+                            <p>'.$this->l('Contracts activated through contracts configuration menu are displayed in the checkout. All payment information is filled on our secure user interface.').'</p>',
+                        ),
+                        array(
+                            'type' => 'switch',
+                            'label' => $this->l('Enable recurring payment'),
+                            'name' => 'PAYLINE_SUBSCRIBE_ENABLE',
+                            'is_bool' => true,
+                            'desc' => $this->l('choose wether to display Payline subscribe payment in your checkout or not'),
+                            'values' => array(
+                                array(
+                                    'id' => 'active_on',
+                                    'value' => true,
+                                    'label' => $this->l('Enabled'),
+                                ),
+                                array(
+                                    'id' => 'active_off',
+                                    'value' => false,
+                                    'label' => $this->l('Disabled'),
+                                )
+                            ),
+                        ),
+                        array(
+                            'form_group_class' => ($this->langConfigHaveAtLeastOneEmptyValue('PAYLINE_SUBSCRIBE_TITLE') ? 'has-error' : ''),
+                            'lang' => true,
+                            'required' => true,
+                            'type' => 'text',
+                            'name' => 'PAYLINE_SUBSCRIBE_TITLE',
+                            'label' => $this->l('Title'),
+                            'placeholder' => '',
+                            'maxlength' => 255,
+                        ),
+                        array(
+                            'lang' => true,
+                            'type' => 'text',
+                            'name' => 'PAYLINE_SUBSCRIBE_SUBTITLE',
+                            'label' => $this->l('Subtitle'),
+                            'placeholder' => '',
+                            'maxlength' => 255,
+                        ),
+                        array(
+                            'type' => 'select',
+                            'name' => 'PAYLINE_SUBSCRIBE_START_DATE',
+                            'label' => $this->l('Start date of scheduler'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('subscribe-start-date'),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'type' => 'select',
+                            'name' => 'PAYLINE_SUBSCRIBE_NUMBER',
+                            'label' => $this->l('Number of payments'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('subscribe-periods'),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'type' => 'select',
+                            'name' => 'PAYLINE_SUBSCRIBE_PERIODICITY',
+                            'label' => $this->l('Periodicity of payments'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('subscribe-frequency'),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'type' => 'select',
+                            'desc' => $this->l('0 if you want the payment to take place the same day as the date of the first order'),
+                            'name' => 'PAYLINE_SUBSCRIBE_DAY',
+                            'label' => $this->l('Recurring days'),
+                            'options' => array(
+                                'query' => $this->getConfigSelectList('subscribe-days'),
+                                'id' => 'value',
+                                'name' => 'name',
+                            ),
+                        ),
+                        array(
+                            'type' => 'product-selector',
+                            'name' => 'PAYLINE_SUBSCRIBE_PLIST',
+                            'label' => $this->l('Allowed product list'),
+                            'values' => $subscribeProductList,
+                        ),
+                        array(
+                            'type' => 'switch',
+                            'desc' => $this->l('If a product from the cart is in this list, only this method will be shown. Else, this method will only be available if a product will be in your cart.'),
+                            'label' => $this->l('Set this product list as exclusive'),
+                            'name' => 'PAYLINE_SUBSCRIBE_EXCLUSIVE',
+                            'is_bool' => true,
+                            'values' => array(
+                                array(
+                                    'id' => 'active_on',
+                                    'value' => true,
+                                    'label' => $this->l('Enabled'),
+                                ),
+                                array(
+                                    'id' => 'active_off',
+                                    'value' => false,
+                                    'label' => $this->l('Disabled'),
+                                )
+                            ),
+                        ),
+                    ),
+                    'submit' => array(
+                        'title' => $this->l('Save'),
+                    ),
+                ),
+            );
         } elseif ($tabName == 'contracts') {
             $currentPos = Configuration::get('PAYLINE_POS');
             $contractsList = array();
@@ -1653,6 +2120,22 @@ class payline extends PaymentModule
     }
 
     /**
+     * Get list of product id allowed by subscription method
+     * @since 2.2.0
+     * @return array
+     */
+    protected function getSubscribeProductList()
+    {
+        $subscribeProductListId = array();
+        $subscribeProductListIdValue = Configuration::get('PAYLINE_SUBSCRIBE_PLIST');
+        if (!empty($subscribeProductListIdValue)) {
+            $subscribeProductListId = array_map('intval', explode(',', $subscribeProductListIdValue));
+        }
+
+        return $subscribeProductListId;
+    }
+
+    /**
      * Get multilang values for a specific input
      * @since 2.1.0
      * @param string $configKey
@@ -1671,6 +2154,23 @@ class payline extends PaymentModule
     }
 
     /**
+     * Check if a multilang values has an empty value
+     * @since 2.2.0
+     * @param string $configKey
+     * @return array
+     */
+    protected function langConfigHaveAtLeastOneEmptyValue($configKey)
+    {
+        foreach ($this->getConfigLangValue($configKey) as $langValue) {
+            if (!strlen($langValue)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Set values for the inputs.
      * @since 2.0.0
      * @param string $tabName
@@ -1681,6 +2181,8 @@ class payline extends PaymentModule
         if ($tabName == 'web-payment') {
             return array(
                 'PAYLINE_WEB_CASH_ENABLE' => Configuration::get('PAYLINE_WEB_CASH_ENABLE'),
+                'PAYLINE_WEB_CASH_TITLE' => $this->getConfigLangValue('PAYLINE_WEB_CASH_TITLE'),
+                'PAYLINE_WEB_CASH_SUBTITLE' => $this->getConfigLangValue('PAYLINE_WEB_CASH_SUBTITLE'),
                 'PAYLINE_WEB_CASH_ACTION' => Configuration::get('PAYLINE_WEB_CASH_ACTION'),
                 'PAYLINE_WEB_CASH_VALIDATION' => Configuration::get('PAYLINE_WEB_CASH_VALIDATION'),
                 'PAYLINE_WEB_CASH_BY_WALLET' => Configuration::get('PAYLINE_WEB_CASH_BY_WALLET'),
@@ -1691,7 +2193,7 @@ class payline extends PaymentModule
             return array(
                 'PAYLINE_RECURRING_ENABLE' => Configuration::get('PAYLINE_RECURRING_ENABLE'),
                 'PAYLINE_RECURRING_TITLE' => $this->getConfigLangValue('PAYLINE_RECURRING_TITLE'),
-                'PAYLINE_RECURRING_SUBTITLE' =>  $this->getConfigLangValue('PAYLINE_RECURRING_SUBTITLE'),
+                'PAYLINE_RECURRING_SUBTITLE' => $this->getConfigLangValue('PAYLINE_RECURRING_SUBTITLE'),
                 'PAYLINE_RECURRING_TRIGGER' => (float)Configuration::get('PAYLINE_RECURRING_TRIGGER'),
                 'PAYLINE_RECURRING_NUMBER' => (int)Configuration::get('PAYLINE_RECURRING_NUMBER'),
                 'PAYLINE_RECURRING_PERIODICITY' => Configuration::get('PAYLINE_RECURRING_PERIODICITY'),
@@ -1699,6 +2201,18 @@ class payline extends PaymentModule
                 'PAYLINE_RECURRING_BY_WALLET' => Configuration::get('PAYLINE_RECURRING_BY_WALLET'),
                 'PAYLINE_RECURRING_UX' => Configuration::get('PAYLINE_RECURRING_UX'),
                 'PAYLINE_RECURRING_CUSTOM_CODE' => Configuration::get('PAYLINE_RECURRING_CUSTOM_CODE'),
+            );
+        } elseif ($tabName == 'subscribe-payment') {
+            return array(
+                'PAYLINE_SUBSCRIBE_ENABLE' => Configuration::get('PAYLINE_SUBSCRIBE_ENABLE'),
+                'PAYLINE_SUBSCRIBE_TITLE' => $this->getConfigLangValue('PAYLINE_SUBSCRIBE_TITLE'),
+                'PAYLINE_SUBSCRIBE_SUBTITLE' => $this->getConfigLangValue('PAYLINE_SUBSCRIBE_SUBTITLE'),
+                'PAYLINE_SUBSCRIBE_START_DATE' => (int)Configuration::get('PAYLINE_SUBSCRIBE_START_DATE'),
+                'PAYLINE_SUBSCRIBE_NUMBER' => (int)Configuration::get('PAYLINE_SUBSCRIBE_NUMBER'),
+                'PAYLINE_SUBSCRIBE_PERIODICITY' => Configuration::get('PAYLINE_SUBSCRIBE_PERIODICITY'),
+                'PAYLINE_SUBSCRIBE_DAY' => (int)Configuration::get('PAYLINE_SUBSCRIBE_DAY'),
+                'PAYLINE_SUBSCRIBE_PLIST' => Configuration::get('PAYLINE_SUBSCRIBE_PLIST'),
+                'PAYLINE_SUBSCRIBE_EXCLUSIVE' => Configuration::get('PAYLINE_SUBSCRIBE_EXCLUSIVE'),
             );
         } elseif ($tabName == 'payline') {
             return array(
@@ -1736,6 +2250,10 @@ class payline extends PaymentModule
             $tabName = 'recurring-web-payment';
             // Add confirmation message
             $this->context->controller->confirmations[] = $this->l('Configuration saved.');
+        } elseif (Tools::isSubmit('submitPaylinesubscribe-payment')) {
+            $tabName = 'subscribe-payment';
+            // Add confirmation message
+            $this->context->controller->confirmations[] = $this->l('Configuration saved.');
         } elseif (Tools::isSubmit('submitPaylinepayline')) {
             $tabName = 'payline';
         } elseif (Tools::isSubmit('submitPaylinecontracts')) {
@@ -1758,11 +2276,16 @@ class payline extends PaymentModule
                 'PAYLINE_RECURRING_CUSTOM_CODE',
                 'PAYLINE_CONTRACTS',
                 'PAYLINE_ALT_CONTRACTS',
+                'PAYLINE_SUBSCRIBE_PLIST',
             );
             // Multilang fields
             $multiLangFields = array(
+                'PAYLINE_WEB_CASH_TITLE',
+                'PAYLINE_WEB_CASH_SUBTITLE',
                 'PAYLINE_RECURRING_TITLE',
                 'PAYLINE_RECURRING_SUBTITLE',
+                'PAYLINE_SUBSCRIBE_TITLE',
+                'PAYLINE_SUBSCRIBE_SUBTITLE',
             );
             foreach (array_keys($form_values) as $key) {
                 if ($key == 'PAYLINE_CONTRACTS' || $key == 'PAYLINE_ALT_CONTRACTS') {
@@ -1775,6 +2298,9 @@ class payline extends PaymentModule
                         }
                     }
                     $newValue = Tools::jsonEncode($contractsList);
+                } elseif ($key == 'PAYLINE_SUBSCRIBE_PLIST') {
+                    $newValue = ltrim(rtrim(trim(Tools::getValue($key)), ','), ',');
+                    $newValue = implode(',', array_map('intval', explode(',', $newValue)));
                 } elseif (in_array($key, $multiLangFields)) {
                     $newValue = array();
                     foreach ($languages as $lang) {
@@ -1799,6 +2325,31 @@ class payline extends PaymentModule
                 }
                 Configuration::updateValue($key, $newValue);
             }
+
+            // Required fields, check value and display errors
+            $requiredMultiLangFields = array();
+            if ($tabName == 'web-payment') {
+                $requiredMultiLangFields['PAYLINE_WEB_CASH_TITLE'] = $this->l('Title');
+            }
+            if ($tabName == 'recurring-web-payment') {
+                $requiredMultiLangFields['PAYLINE_RECURRING_TITLE'] = $this->l('Title');
+            }
+            if ($tabName == 'subscribe-payment') {
+                $requiredMultiLangFields['PAYLINE_SUBSCRIBE_TITLE'] = $this->l('Title');
+            }
+
+            foreach ($requiredMultiLangFields as $requiredKey => $label) {
+                foreach ($languages as $lang) {
+                    $langValue = Tools::getValue($requiredKey . '_' . (int)$lang['id_lang']);
+                    if (!strlen($langValue)) {
+                        $this->context->controller->errors[] = sprintf($this->l('You must fill each required fields (check %s - %s language).'), $label, $lang['iso_code']);
+                    }
+                }
+            }
+            if (sizeof($this->context->controller->errors)) {
+                $this->context->controller->confirmations = array();
+                $this->context->controller->errors = array_unique($this->context->controller->errors);
+            }
         }
     }
 
@@ -1814,6 +2365,8 @@ class payline extends PaymentModule
                 return $this->l('Order can\'t be created because paid amount is different than total cart amount.');
             case payline::INVALID_CART_ID:
                 return $this->l('Order can\'t be created because related cart does not exists.');
+            case payline::SUBSCRIPTION_ERROR:
+                return $this->l('Order can\'t be created because subscription failed.');
             default:
                 return null;
         }
@@ -1824,10 +2377,11 @@ class payline extends PaymentModule
      * @param Cart $cart
      * @param array $paymentInfos
      * @param string $token
+     * @param string $paymentRecordId
      * @since 2.0.0
      * @return array
      */
-    protected function createOrder(Cart $cart, $paymentInfos, $token)
+    protected function createOrder(Cart $cart, $paymentInfos, $token, $paymentRecordId = null)
     {
         $amountPaid = ($paymentInfos['payment']['amount'] / 100);
         // Set right order state depending on defined payment action
@@ -1895,16 +2449,8 @@ class payline extends PaymentModule
 
             // We try to refund/cancel the current transaction
             // If refund can't be done, we continue the classic process. Order will be marked as invalid
-            if ($paymentInfos['payment']['action'] == 100) {
-                // Cancel author
-                $cancel = PaylinePaymentGateway::resetTransaction($paymentInfos['transaction']['id'], null, $this->l('Error: automatic reset (cart total != amount paid)'));
-                $validResponse = PaylinePaymentGateway::isValidResponse($cancel, array('02601', '02602'));
-            } else {
-                // Refund
-                $cancel = PaylinePaymentGateway::refundTransaction($paymentInfos['transaction']['id'], null, $this->l('Error: automatic refund (cart total != amount paid)'));
-                $validResponse = PaylinePaymentGateway::isValidResponse($cancel);
-            }
-            if ($validResponse) {
+            $cancelTransactionResult = PaylinePaymentGateway::cancelTransaction($paymentInfos, $this->l('Error: automatic cancel (cart total != amount paid)'));
+            if ($cancelTransactionResult) {
                 $errorCode = payline::INVALID_AMOUNT;
 
                 // Set a cookie value that expose how many try users has made with invalid amount
@@ -1940,8 +2486,8 @@ class payline extends PaymentModule
                 if ($validateOrderResult) {
                     $order = new Order($this->currentOrder);
                     if (Validate::isLoadedObject($order)) {
-                        // Save token for later usage
-                        PaylineToken::insert($order, $cart, $token);
+                        // Save token and payment record id (if defined) for later usage
+                        PaylineToken::insert($order, $cart, $token, $paymentRecordId, $paymentInfos['transaction']['id']);
 
                         if ($fixOrderPayment) {
                             // We need to fix the total paid real amount here
@@ -1969,7 +2515,7 @@ class payline extends PaymentModule
             // Retrieve order
             if (Validate::isLoadedObject($order)) {
                 // Save token for later usage (if needed)
-                PaylineToken::insert($order, $cart, $token);
+                PaylineToken::insert($order, $cart, $token, $paymentRecordId, $paymentInfos['transaction']['id']);
 
                 // Check if transaction ID is the same
                 $orderPayments = OrderPayment::getByOrderReference($order->reference);
@@ -2013,6 +2559,7 @@ class payline extends PaymentModule
     {
         $paymentInfos = PaylinePaymentGateway::getPaymentInformations($token);
         $errorCode = null;
+        $order = null;
 
         // Check if id_cart and secure_key are the same
         if (isset($paymentInfos['formatedPrivateDataList']) && is_array($paymentInfos['formatedPrivateDataList'])
@@ -2027,11 +2574,28 @@ class payline extends PaymentModule
                 // Check if cart exists
                 $cart = new Cart($idCart);
                 if (Validate::isLoadedObject($cart)) {
-                    // Create the order
-                    list($order, $validateOrderResult, $errorMessage, $errorCode) = $this->createOrder($cart, $paymentInfos, $token);
-
-                    if ($order instanceof Order && Validate::isLoadedObject($order)) {
-                        Tools::redirect('index.php?controller=order-confirmation&id_cart='.$idCart.'&id_module='.$this->id.'&id_order='.$this->currentOrder.'&key='.$this->context->customer->secure_key);
+                    // Create the recurrent wallet payment
+                    if (!empty($paymentInfos['formatedPrivateDataList']['payment_method']) && $paymentInfos['formatedPrivateDataList']['payment_method'] == PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD) {
+                        $subscriptionRequest = PaylinePaymentGateway::createSubscriptionRequest($paymentInfos);
+                        if (PaylinePaymentGateway::isValidResponse($subscriptionRequest, array('02500', '02501'))) {
+                            // Create the order
+                            list($order, $validateOrderResult, $errorMessage, $errorCode) = $this->createOrder($cart, $paymentInfos, $token, $subscriptionRequest['paymentRecordId']);
+                        } else {
+                            // Unable to create subscription request...
+                            $errorCode = payline::SUBSCRIPTION_ERROR;
+                            $cancelTransactionResult = PaylinePaymentGateway::cancelTransaction($paymentInfos, $this->l('Error: automatic cancel (cannot create subscription)'));
+                            if ($cancelTransactionResult) {
+                                // Set a cookie value that expose how many try users has made with invalid amount
+                                if (!isset($this->context->cookie->pl_try)) {
+                                    $this->context->cookie->pl_try = 2;
+                                } else {
+                                    $this->context->cookie->pl_try += 1;
+                                }
+                            }
+                        }
+                    } else {
+                        // Create the order
+                        list($order, $validateOrderResult, $errorMessage, $errorCode) = $this->createOrder($cart, $paymentInfos, $token);
                     }
                 } else {
                     // Invalid Cart ID
@@ -2039,6 +2603,12 @@ class payline extends PaymentModule
                 }
             }
         }
+
+        // Order has been created, redirect customer to confirmation page
+        if (isset($order) && $order instanceof Order && Validate::isLoadedObject($order)) {
+            Tools::redirect('index.php?controller=order-confirmation&id_cart='.$idCart.'&id_module='.$this->id.'&id_order='.$this->currentOrder.'&key='.$this->context->customer->secure_key);
+        }
+
         $urlParams = array(
             'paylineError' => 1,
             'paylinetoken' => $token,
@@ -2046,11 +2616,16 @@ class payline extends PaymentModule
         if (isset($errorCode)) {
             $urlParams['paylineErrorCode'] = $errorCode;
         }
+
         // Refused payment, or any other error case (customer case)
-        if (Configuration::get('PAYLINE_WEB_CASH_UX') == 'lightbox' || Configuration::get('PAYLINE_WEB_CASH_UX') == 'redirect') {
+        if (!empty($paymentInfos['formatedPrivateDataList']['payment_method']) && $paymentInfos['formatedPrivateDataList']['payment_method'] == PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD) {
             Tools::redirect($this->context->link->getPageLink('order', true, $this->context->language->id, $urlParams));
         } else {
-            Tools::redirect($this->context->link->getModuleLink($this->name, 'payment', $urlParams, true));
+            if (Configuration::get('PAYLINE_WEB_CASH_UX') == 'lightbox' || Configuration::get('PAYLINE_WEB_CASH_UX') == 'redirect') {
+                Tools::redirect($this->context->link->getPageLink('order', true, $this->context->language->id, $urlParams));
+            } else {
+                Tools::redirect($this->context->link->getModuleLink($this->name, 'payment', $urlParams, true));
+            }
         }
     }
 
@@ -2081,8 +2656,27 @@ class payline extends PaymentModule
                     )));
                 }
 
-                // Create the order
-                list($order, $validateOrderResult, $errorMessage) = $this->createOrder($cart, $paymentInfos, $token);
+                // Create the recurrent wallet payment
+                if (!empty($paymentInfos['formatedPrivateDataList']['payment_method']) && $paymentInfos['formatedPrivateDataList']['payment_method'] == PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD) {
+                    $subscriptionRequest = PaylinePaymentGateway::createSubscriptionRequest($paymentInfos);
+                    if (PaylinePaymentGateway::isValidResponse($subscriptionRequest, array('02500', '02501'))) {
+                        // Create the order
+                        list($order, $validateOrderResult, $errorMessage, $errorCode) = $this->createOrder($cart, $paymentInfos, $token, $subscriptionRequest['paymentRecordId']);
+                    } else {
+                        // Unable to create subscription
+                        $errorCode = payline::SUBSCRIPTION_ERROR;
+                        // Cancel the previous transaction
+                        $cancelTransactionResult = PaylinePaymentGateway::cancelTransaction($paymentInfos, $this->l('Error: automatic cancel (cannot create subscription)'));
+                        die(Tools::jsonEncode(array(
+                            'result' => $validateOrderResult,
+                            'error' => 'Unable to create subscription',
+                            'errorCode' => $subscriptionRequest['result']['code'],
+                        )));
+                    }
+                } else {
+                    // Create the order
+                    list($order, $validateOrderResult, $errorMessage, $errorCode) = $this->createOrder($cart, $paymentInfos, $token);
+                }
             } else {
                 // Refused payment, or any other error case (customer case)
                 die(Tools::jsonEncode(array(
@@ -2274,6 +2868,11 @@ class payline extends PaymentModule
             $idOrder = Order::getOrderByCartId($cart->id);
             $order = new Order($idOrder);
             if (Validate::isLoadedObject($order)) {
+                // Update payment_record_id
+                if (!PaylineToken::getPaymentRecordIdByIdOrder($order->id)) {
+                    PaylineToken::setPaymentRecordIdByIdOrder($order, $paymentRecordId);
+                }
+
                 // Check if transaction ID is the same
                 $orderPayments = OrderPayment::getByOrderReference($order->reference);
                 if (isset($paymentRecord['billingRecordList']) && is_array($paymentRecord['billingRecordList']) &&
@@ -2334,6 +2933,87 @@ class payline extends PaymentModule
                             $history->changeIdOrderState(_PS_OS_PAYMENT_, (int)$order->id, true);
                             $history->addWithemail();
                         }
+                    }
+                }
+            }
+        }
+        if (ob_get_length() > 0) {
+            ob_clean();
+        }
+        die(Tools::jsonEncode(array('result' => $notificationResult)));
+    }
+
+    /**
+     * Process order update from REC transaction notification
+     * @param string $idTransaction
+     * @param string $paymentRecordId
+     * @since 2.2.0
+     * @return void
+     */
+    public function processRecNotification($idTransaction, $paymentRecordId)
+    {
+        $notificationResult = false;
+        $transaction = PaylinePaymentGateway::getTransactionInformations($idTransaction);
+
+        if (!empty($transaction['formatedPrivateDataList']['payment_method']) && $transaction['formatedPrivateDataList']['payment_method'] == PaylinePaymentGateway::SUBSCRIBE_PAYMENT_METHOD) {
+            // Wait for a transaction into pending state
+            if (!empty($transaction['payment']['contractNumber'])) {
+                // Get payment record
+                $paymentRecord = PaylinePaymentGateway::getPaymentRecord($transaction['payment']['contractNumber'], $paymentRecordId);
+                if (!PaylinePaymentGateway::isValidResponse($paymentRecord, array('02500'))) {
+                    die(Tools::jsonEncode(array(
+                        'result' => $notificationResult,
+                        'error' => 'Invalid paymentRecord response',
+                    )));
+                }
+
+                // Check if an order has already been created for this transaction id
+                $idOrder = PaylineToken::getIdOrderByIdTransaction($transaction['transaction']['id']);
+                if (!empty($idOrder)) {
+                    die(Tools::jsonEncode(array(
+                        'result' => false,
+                        'error' => 'An order already exists for transaction ' . $transaction['transaction']['id'],
+                    )));
+                }
+
+                // Retrieve cart
+                $idCart = null;
+                $cart = null;
+                if (isset($transaction['formatedPrivateDataList']) && is_array($transaction['formatedPrivateDataList']) && isset($transaction['formatedPrivateDataList']['id_cart'])) {
+                    $idCart = (int)$transaction['formatedPrivateDataList']['id_cart'];
+                }
+                // Check if cart original exists
+                $cart = new Cart($idCart);
+                if (!Validate::isLoadedObject($cart)) {
+                    die(Tools::jsonEncode(array(
+                        'result' => $notificationResult,
+                        'error' => 'Invalid Cart ID #'.$idCart.' - Cart does not exists',
+                    )));
+                }
+
+                // Always clean Cart::orderExists cache before trying to create the order
+                if (class_exists('Cache', false) && method_exists('Cache', 'clean')) {
+                    Cache::clean('Cart::orderExists_' . $cart->id);
+                }
+                $orderExists = $cart->OrderExists();
+                if (!$orderExists) {
+                    // There is no order for this cart
+                    die(Tools::jsonEncode(array(
+                        'result' => $notificationResult,
+                        'error' => 'Invalid Cart ID #'.$idCart.' - Original order does not exists',
+                    )));
+                }
+
+                // Retrieve order
+                $idOrder = Order::getOrderByCartId($cart->id);
+                $order = new Order($idOrder);
+                if (Validate::isLoadedObject($order)) {
+                    // Let's duplicate original cart as order exists
+                    $newCartDuplicate = $cart->duplicate();
+                    if (!empty($newCartDuplicate['success']) && isset($newCartDuplicate['cart'])) {
+                        $newCart = $newCartDuplicate['cart'];
+                        // Create the order
+                        list($order, $notificationResult, $errorMessage, $errorCode) = $this->createOrder($newCart, $transaction, '', $paymentRecordId);
                     }
                 }
             }
