@@ -56,7 +56,8 @@ function payline_initProductsAutocomplete()
 
     $('#product_autocomplete_input').setOptions({
         extraParams: {
-            excludeIds: payline_getProductsIds()
+            excludeIds: payline_getProductsIds(),
+            exclude_packs : 0 
         },
     });
 };
@@ -96,7 +97,10 @@ function payline_addProduct(event, data, formatted)
     $inputProducts.val($inputProducts.val() + productId + ',');
     $('#product_autocomplete_input').val('');
     $('#product_autocomplete_input').setOptions({
-        extraParams: { excludeIds : payline_getProductsIds() }
+        extraParams: { 
+        	excludeIds : payline_getProductsIds(),
+        	exclude_packs : 0  
+        }
     });
 };
 
@@ -137,7 +141,10 @@ function payline_delProduct(id)
     $("#PAYLINE_SUBSCRIBE_PLIST-PRODUCT-" + id).remove();
 
     $('#product_autocomplete_input').setOptions({
-        extraParams: {excludeIds : payline_getProductsIds()}
+        extraParams: {
+        	excludeIds : payline_getProductsIds(),
+        	exclude_packs : 0 
+        }
     });
 };
 

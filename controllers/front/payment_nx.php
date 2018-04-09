@@ -8,7 +8,6 @@
 
 class paylinepayment_nxModuleFrontController extends ModuleFrontController
 {
-    public $auth = true;
     public $ssl = true;
     public $display_column_left = false;
     public $display_column_right = false;

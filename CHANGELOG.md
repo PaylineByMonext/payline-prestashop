@@ -1,3 +1,12 @@
+2.2.1
+===
+<h2>released on 2018-04-09</h2>
+<ul>
+<li>fix 'title' notice</li>
+<li>allow guest order with in-shop UX</li>
+<li>disable auto-capture for already captured payments</li>
+</ul>
+
 2.2
 ===
 <h2>released on 2018-01-20</h2>

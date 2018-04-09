@@ -90,7 +90,7 @@ class payline extends PaymentModule
         $this->name = 'payline';
         $this->tab = 'payments_gateways';
         $this->module_key = '';
-        $this->version = '2.2.0';
+        $this->version = '2.2.1';
         $this->author = 'Monext';
         $this->need_instance = true;
 
@@ -655,7 +655,7 @@ class payline extends PaymentModule
      */
     public function hookActionOrderStatusUpdate($params)
     {
-        if (!empty($params['id_order']) && !empty($params['newOrderStatus']) && Validate::isLoadedObject($params['newOrderStatus']) && $params['newOrderStatus']->id == Configuration::get('PAYLINE_WEB_CASH_VALIDATION')) {
+        if (!empty($params['id_order']) && !empty($params['newOrderStatus']) && Validate::isLoadedObject($params['newOrderStatus']) && $params['newOrderStatus']->id == Configuration::get('PAYLINE_WEB_CASH_VALIDATION') && '100' == Configuration::get('PAYLINE_WEB_CASH_ACTION')) {
             // We have to trigger capture here
             $idTransaction = null;
             $order = new Order((int)$params['id_order']);
@@ -787,7 +787,7 @@ class payline extends PaymentModule
         // Assign to template enabled cards/contracts
         $currentPos = Configuration::get('PAYLINE_POS');
         $enabledContracts = PaylinePaymentGateway::getEnabledContracts();
-        $contractsList = PaylinePaymentGateway::getContractsByPosLabel($currentPos, $enabledContracts);
+        $contractsList = PaylinePaymentGateway::getContractsByPosLabel($currentPos, $enabledContracts, true);
         $this->smarty->assign(array(
             'payline_contracts' => $contractsList,
         ));
@@ -890,8 +890,8 @@ class payline extends PaymentModule
             }
         }
 
-        // Subscribe payment
-        if (Configuration::get('PAYLINE_SUBSCRIBE_ENABLE')) {
+        // Subscribe payment (must be logged customer, not guest)
+        if (Configuration::get('PAYLINE_SUBSCRIBE_ENABLE') && !empty($this->context->cookie->id_customer) && $this->context->customer->isLogged()) {
             $subscribePayment = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
             $subscribeTitle = Configuration::get('PAYLINE_SUBSCRIBE_TITLE', $this->context->language->id);
             $subscribeSubTitle = Configuration::get('PAYLINE_SUBSCRIBE_SUBTITLE', $this->context->language->id);
@@ -1000,7 +1000,7 @@ class payline extends PaymentModule
         // Assign to template enabled cards/contracts
         $currentPos = Configuration::get('PAYLINE_POS');
         $enabledContracts = PaylinePaymentGateway::getEnabledContracts();
-        $contractsList = PaylinePaymentGateway::getContractsByPosLabel($currentPos, $enabledContracts);
+        $contractsList = PaylinePaymentGateway::getContractsByPosLabel($currentPos, $enabledContracts, true);
         $this->smarty->assign(array(
             'payline_contracts' => $contractsList,
         ));
@@ -1096,8 +1096,8 @@ class payline extends PaymentModule
             }
         }
 
-        // Subscribe payment
-        if (Configuration::get('PAYLINE_SUBSCRIBE_ENABLE')) {
+        // Subscribe payment (must be logged customer, not guest)
+        if (Configuration::get('PAYLINE_SUBSCRIBE_ENABLE') && !empty($this->context->cookie->id_customer) && $this->context->customer->isLogged()) {
             $subscribeTitle = Configuration::get('PAYLINE_SUBSCRIBE_TITLE', $this->context->language->id);
             if (!strlen($subscribeTitle)) {
                 $subscribeTitle = $this->l('Recurring payment');
@@ -2321,6 +2321,7 @@ class payline extends PaymentModule
                         // Reset contract list on credentials update
                         Configuration::updateValue('PAYLINE_CONTRACTS', '[]');
                         Configuration::updateValue('PAYLINE_ALT_CONTRACTS', '[]');
+                        Configuration::updateValue('PAYLINE_POS_CACHE', '');
                     }
                 }
                 Configuration::updateValue($key, $newValue);

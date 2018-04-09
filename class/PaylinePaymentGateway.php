@@ -145,11 +145,22 @@ class PaylinePaymentGateway
     /**
      * Get all point of sales (POS) related to the current account
      * @since 2.0.0
+     * @param bool $useCache
      * @return array
      */
-    public static function getPointOfSales()
+    public static function getPointOfSales($useCache = false)
     {
+        // Try to retrieve POS from cache, else use merchantSettings
+        if ($useCache) {
+            $posCache = Configuration::get('PAYLINE_POS_CACHE');
+            if (!empty($posCache)) {
+                return Tools::jsonDecode(base64_decode($posCache), true);
+            }
+        }
+
         if (self::checkCredentials() && isset(self::$merchantSettings['listPointOfSell']) && is_array(self::$merchantSettings['listPointOfSell']) && isset(self::$merchantSettings['listPointOfSell']['pointOfSell']) && is_array(self::$merchantSettings['listPointOfSell']['pointOfSell'])) {
+            // Save POS in cache
+            Configuration::updateValue('PAYLINE_POS_CACHE', base64_encode(Tools::jsonEncode(self::$merchantSettings['listPointOfSell']['pointOfSell'])));
             return self::$merchantSettings['listPointOfSell']['pointOfSell'];
         }
 
@@ -166,7 +177,7 @@ class PaylinePaymentGateway
     {
         $posList = self::getPointOfSales();
         foreach ($posList as $pos) {
-            if ($pos['label'] == $posLabel) {
+            if (trim($pos['label']) == $posLabel) {
                 return $pos;
             }
         }
@@ -179,13 +190,14 @@ class PaylinePaymentGateway
      * @since 2.0.0
      * @param string $posLabel
      * @param array $enabledContracts
+     * @param bool $useCache
      * @return array
      */
-    public static function getContractsByPosLabel($posLabel, $enabledContracts = array())
+    public static function getContractsByPosLabel($posLabel, $enabledContracts = array(), $useCache = false)
     {
-        $posList = self::getPointOfSales();
+        $posList = self::getPointOfSales($useCache);
         foreach ($posList as $pos) {
-            if ($pos['label'] == $posLabel && isset($pos['contracts']) && is_array($pos['contracts']) && isset($pos['contracts']['contract']) && is_array($pos['contracts']['contract'])) {
+            if (trim($pos['label']) == $posLabel && isset($pos['contracts']) && is_array($pos['contracts']) && isset($pos['contracts']['contract']) && is_array($pos['contracts']['contract'])) {
                 // Retrieve contracts and sort them
                 $finalContractsList = array();
                 $disabledContracts = array();

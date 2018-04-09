@@ -8,7 +8,6 @@
 
 class paylinePaymentModuleFrontController extends ModuleFrontController
 {
-    public $auth = true;
     public $ssl = true;
     public $display_column_left = false;
     public $display_column_right = false;
@@ -55,8 +54,14 @@ class paylinePaymentModuleFrontController extends ModuleFrontController
             Tools::redirect('index.php?controller=order');
         }
 
+        $webCashTitle = Configuration::get('PAYLINE_WEB_CASH_TITLE', $this->context->language->id);
+        $webCashSubTitle = Configuration::get('PAYLINE_WEB_CASH_SUBTITLE', $this->context->language->id);
+
         list($paymentRequest, $paymentRequestParams) = PaylinePaymentGateway::createPaymentRequest($this->context, PaylinePaymentGateway::WEB_PAYMENT_METHOD);
+
         $this->context->smarty->assign(array(
+            'payline_title' => $webCashTitle,
+            'payline_subtitle' => $webCashSubTitle,
             'payline_token' => $paymentRequest['token'],
             'payline_ux_mode' => Configuration::get('PAYLINE_WEB_CASH_UX'),
             'payline_cart_total' => $cart->getOrderTotal(),

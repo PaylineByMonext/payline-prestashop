@@ -22,7 +22,7 @@ class paylineSubscriptionsModuleFrontController extends ModuleFrontController
         parent::setMedia();
 
         if (version_compare(_PS_VERSION_, '1.7.0.0', '>=')) {
-            $this->registerJavascript('modules-payline-subscriptions-js-1', 'modules/payline/views/js/subscriptions.js', ['position' => 'bottom', 'priority' => 150]);
+            $this->registerJavascript('modules-payline-subscriptions-js-1', 'modules/payline/views/js/subscriptions.js', array('position' => 'bottom', 'priority' => 150));
         } else {
             $this->addJS(_MODULE_DIR_.'payline/views/js/subscriptions.js');
         }
