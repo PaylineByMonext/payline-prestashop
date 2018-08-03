@@ -90,7 +90,7 @@ class payline extends PaymentModule
         $this->name = 'payline';
         $this->tab = 'payments_gateways';
         $this->module_key = '';
-        $this->version = '2.2.1';
+        $this->version = '2.2.2';
         $this->author = 'Monext';
         $this->need_instance = true;
 
@@ -2443,13 +2443,15 @@ class payline extends PaymentModule
             // Web payment
             $totalAmountToPay = (float)Tools::ps_round((float)$cart->getOrderTotal(true, Cart::BOTH), 2);
         }
-
+        
         if ($checkAmountToPay && number_format($totalAmountToPay, _PS_PRICE_COMPUTE_PRECISION_) != number_format($totalAmountPaid, _PS_PRICE_COMPUTE_PRECISION_)) {
             // Wrong amount paid, do not create order
-            PrestaShopLogger::addLog('payline::createOrder - Wrong amount paid, we do not create order', 1, null, 'Cart', $cart->id);
+            PrestaShopLogger::addLog('payline::createOrder - amount mismatch : topay='.number_format($totalAmountToPay, _PS_PRICE_COMPUTE_PRECISION_).', paid='.number_format($totalAmountPaid, _PS_PRICE_COMPUTE_PRECISION_), 1, null, 'Cart', $cart->id);
 
             // We try to refund/cancel the current transaction
             // If refund can't be done, we continue the classic process. Order will be marked as invalid
+            // Quick fix for 2.2.2 : refund is disabled
+            /*
             $cancelTransactionResult = PaylinePaymentGateway::cancelTransaction($paymentInfos, $this->l('Error: automatic cancel (cart total != amount paid)'));
             if ($cancelTransactionResult) {
                 $errorCode = payline::INVALID_AMOUNT;
@@ -2463,6 +2465,7 @@ class payline extends PaymentModule
 
                 return array($order, $validateOrderResult, $errorMessage, $errorCode);
             }
+            */
         }
 
         // Unset pl_try cookie value

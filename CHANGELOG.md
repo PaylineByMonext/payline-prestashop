@@ -1,3 +1,10 @@
+2.2.2
+===
+<h2>released on 2018-08-03</h2>
+<ul>
+<li>remove auto-refund when an amount mismatch is detected</li>
+</ul>
+
 2.2.1
 ===
 <h2>released on 2018-04-09</h2>
