@@ -5,6 +5,12 @@ This is the Payline Payment plugin for Prestashop 1.6 and 1.7 stores.
 
 Feel free to request or suggest new features !
 
+<h2>Prerequisites</h2>
+<ul>
+<li>This extension has a dependency with  <a href="https://github.com/PaylineByMonext/payline-php-sdk">payline-php-sdk</a>, make sure your environment is compliant</li>
+<li>If you already use 1.6.* version of our module, uninstall it (save your access key before that)</li>
+</ul>
+
 <h2>Installation</h2>
 <ul>
 <li>Download <b>payline-prestashop-master.zip</b> archive from GitHub.</li>
