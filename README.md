@@ -12,8 +12,12 @@ Feel free to request or suggest new features !
 </ul>
 
 <h2>Installation</h2>
-<ul>
+<ol>
 <li>Download <b>payline-prestashop-master.zip</b> archive from GitHub.</li>
-<li>Open it and rename the <b>payline-prestashop-master</b> root folder to <b>payline</b>. Save changes.</li>
+<li>Unzip it</li>
+<li>Rename the <b>payline-prestashop-master</b> root folder to <b>payline</b>. Save changes.</li>
 <li>Use modified archive to install extension through your Prestashop back office.</li>
-</ul>
+</ol>
+
+<h2>Documentation</h2>
+Check documentation <a href='https://payline.atlassian.net/wiki/spaces/DT/pages/54001683/Module+Prestashop+1.5+et+1.6+et+1.7' target='blanck'>here</a>

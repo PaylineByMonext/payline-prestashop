@@ -90,7 +90,7 @@ class payline extends PaymentModule
         $this->name = 'payline';
         $this->tab = 'payments_gateways';
         $this->module_key = '';
-        $this->version = '2.2.3';
+        $this->version = '2.2.4';
         $this->author = 'Monext';
         $this->need_instance = true;
 

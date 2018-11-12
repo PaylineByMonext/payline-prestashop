@@ -1,3 +1,10 @@
+2.2.4
+===
+<h2>released on 2018-11-12</h2>
+<ul>
+<li>Add details in README. No functional nor technical changes.</li>
+</ul>
+
 2.2.3
 ===
 <h2>released on 2018-10-05</h2>
