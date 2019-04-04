@@ -90,7 +90,7 @@ class payline extends PaymentModule
         $this->name = 'payline';
         $this->tab = 'payments_gateways';
         $this->module_key = '';
-        $this->version = '2.2.4';
+        $this->version = '2.2.5';
         $this->author = 'Monext';
         $this->need_instance = true;
 
@@ -3029,7 +3029,7 @@ class payline extends PaymentModule
     }
 
     /**
-     * Clone of Order::addOrderPayment() - We force total_paid_real to be = 0 instead of a negative value, so we can update without warning
+     * Clone of Order::addOrderPayment()
      * @since 2.0.0
      * @return bool
      */
@@ -3046,8 +3046,7 @@ class payline extends PaymentModule
         $order_payment->amount = $amount_paid;
         $order_payment->date_add = ($date ? $date : null);
 
-        // Force total_paid_real to 0
-        $order->total_paid_real = 0;
+        $order->total_paid_real = max(0, $order->total_paid_real - abs($amount_paid));
 
         // We put autodate parameter of add method to true if date_add field is null
         $res = $order_payment->add(is_null($order_payment->date_add)) && $order->update();
