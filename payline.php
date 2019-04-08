@@ -360,19 +360,7 @@ class payline extends PaymentModule
 
                     $orderSlipDetailsList = array();
                     // Amount for refund
-                    $amountToRefund = 0.00;
-                    foreach ($order->getProducts() as $idOrderDetail => $product) {
-                        if (($product['product_quantity'] - $product['product_quantity_refunded']) > 0) {
-                            $orderSlipDetailsList[(int)$idOrderDetail] = array(
-                                'id_order_detail' => $idOrderDetail,
-                                'quantity' => ($product['product_quantity'] - $product['product_quantity_refunded']),
-                                'unit_price' => (float)$product['unit_price_tax_excl'],
-                                'amount' => $product['unit_price_tax_incl'] * ($product['product_quantity'] - $product['product_quantity_refunded']),
-                            );
-                        }
-                        $amountToRefund += round(($product['product_price_wt'] * $product['product_quantity']), 2);
-                    }
-                    $amountToRefund += (float)($order->total_shipping);
+                    $amountToRefund = $transaction['payment']['amount'] / 100;
 
                     // Create order slip (available since PS 1.6.0.11)
                     if (method_exists('OrderSlip', 'create')) {
