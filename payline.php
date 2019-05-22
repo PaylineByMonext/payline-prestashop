@@ -401,16 +401,15 @@ class payline extends PaymentModule
             $capture = PaylinePaymentGateway::captureTransaction($idTransaction, 'CPT', $this->l('Manual capture from PrestaShop BackOffice'));
             if (PaylinePaymentGateway::isValidResponse($capture)) {
                 // Capture OK
-                // Change order state
-                $history = new OrderHistory();
-                $history->id_order = (int)$order->id;
-                $history->changeIdOrderState(_PS_OS_PAYMENT_, (int)$order->id);
-                $history->addWithemail();
+                if (Configuration::get('PAYLINE_WEB_CASH_VALIDATION') != _PS_OS_PAYMENT_) {
+                    // Change order state
+                    $history = new OrderHistory();
+                    $history->id_order = (int)$order->id;
+                    $history->changeIdOrderState(_PS_OS_PAYMENT_, (int)$order->id);
+                    $history->addWithemail();
+                }
 
                 if ($doRedirect) {
-                    // Wait 1s because Payline API may take some time to be updated after a capture
-                    sleep(1);
-
                     Tools::redirectAdmin($this->context->link->getAdminLink('AdminOrders') . '&id_order=' . $order->id . '&vieworder&paylineCaptureOK=1');
                 }
             } else {
