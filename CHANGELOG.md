@@ -1,3 +1,10 @@
+2.2.5
+===
+<h2>released on 2019-04-04</h2>
+<ul>
+<li>Update properly order.total_paid_real on partial refund.</li>
+</ul>
+
 2.2.4
 ===
 <h2>released on 2018-11-12</h2>

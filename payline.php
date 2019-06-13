@@ -90,7 +90,7 @@ class payline extends PaymentModule
         $this->name = 'payline';
         $this->tab = 'payments_gateways';
         $this->module_key = '';
-        $this->version = '2.2.4';
+        $this->version = '2.2.5';
         $this->author = 'Monext';
         $this->need_instance = true;
 
@@ -360,19 +360,7 @@ class payline extends PaymentModule
 
                     $orderSlipDetailsList = array();
                     // Amount for refund
-                    $amountToRefund = 0.00;
-                    foreach ($order->getProducts() as $idOrderDetail => $product) {
-                        if (($product['product_quantity'] - $product['product_quantity_refunded']) > 0) {
-                            $orderSlipDetailsList[(int)$idOrderDetail] = array(
-                                'id_order_detail' => $idOrderDetail,
-                                'quantity' => ($product['product_quantity'] - $product['product_quantity_refunded']),
-                                'unit_price' => (float)$product['unit_price_tax_excl'],
-                                'amount' => $product['unit_price_tax_incl'] * ($product['product_quantity'] - $product['product_quantity_refunded']),
-                            );
-                        }
-                        $amountToRefund += round(($product['product_price_wt'] * $product['product_quantity']), 2);
-                    }
-                    $amountToRefund += (float)($order->total_shipping);
+                    $amountToRefund = $transaction['payment']['amount'] / 100;
 
                     // Create order slip (available since PS 1.6.0.11)
                     if (method_exists('OrderSlip', 'create')) {
@@ -413,16 +401,15 @@ class payline extends PaymentModule
             $capture = PaylinePaymentGateway::captureTransaction($idTransaction, 'CPT', $this->l('Manual capture from PrestaShop BackOffice'));
             if (PaylinePaymentGateway::isValidResponse($capture)) {
                 // Capture OK
-                // Change order state
-                $history = new OrderHistory();
-                $history->id_order = (int)$order->id;
-                $history->changeIdOrderState(_PS_OS_PAYMENT_, (int)$order->id);
-                $history->addWithemail();
+                if (Configuration::get('PAYLINE_WEB_CASH_VALIDATION') != _PS_OS_PAYMENT_) {
+                    // Change order state
+                    $history = new OrderHistory();
+                    $history->id_order = (int)$order->id;
+                    $history->changeIdOrderState(_PS_OS_PAYMENT_, (int)$order->id);
+                    $history->addWithemail();
+                }
 
                 if ($doRedirect) {
-                    // Wait 1s because Payline API may take some time to be updated after a capture
-                    sleep(1);
-
                     Tools::redirectAdmin($this->context->link->getAdminLink('AdminOrders') . '&id_order=' . $order->id . '&vieworder&paylineCaptureOK=1');
                 }
             } else {
@@ -3029,7 +3016,7 @@ class payline extends PaymentModule
     }
 
     /**
-     * Clone of Order::addOrderPayment() - We force total_paid_real to be = 0 instead of a negative value, so we can update without warning
+     * Clone of Order::addOrderPayment()
      * @since 2.0.0
      * @return bool
      */
@@ -3046,8 +3033,7 @@ class payline extends PaymentModule
         $order_payment->amount = $amount_paid;
         $order_payment->date_add = ($date ? $date : null);
 
-        // Force total_paid_real to 0
-        $order->total_paid_real = 0;
+        $order->total_paid_real = max(0, $order->total_paid_real - abs($amount_paid));
 
         // We put autodate parameter of add method to true if date_add field is null
         $res = $order_payment->add(is_null($order_payment->date_add)) && $order->update();
