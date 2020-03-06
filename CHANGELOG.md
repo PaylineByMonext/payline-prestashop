@@ -1,3 +1,10 @@
+2.2.5
+===
+<h2>released on 2020-03-06</h2>
+<ul>
+<li>Use PaylineSDK v4.59</li>
+</ul>
+
 2.2.4
 ===
 <h2>released on 2018-11-12</h2>
