@@ -1,66 +1,65 @@
 [
     {
-        "name": "psr/log",
-        "version": "1.0.2",
-        "version_normalized": "1.0.2.0",
+        "name": "monext/payline-sdk",
+        "version": "4.59.5",
+        "version_normalized": "4.59.5.0",
         "source": {
             "type": "git",
-            "url": "https://github.com/php-fig/log.git",
-            "reference": "4ebe3a8bf773a19edfe0a84b6585ba3d401b724d"
+            "url": "https://github.com/PaylineByMonext/payline-php-sdk.git",
+            "reference": "f73fc72b63547e42b00de7fc27432c5b7aff0285"
         },
         "dist": {
             "type": "zip",
-            "url": "https://api.github.com/repos/php-fig/log/zipball/4ebe3a8bf773a19edfe0a84b6585ba3d401b724d",
-            "reference": "4ebe3a8bf773a19edfe0a84b6585ba3d401b724d",
+            "url": "https://api.github.com/repos/PaylineByMonext/payline-php-sdk/zipball/f73fc72b63547e42b00de7fc27432c5b7aff0285",
+            "reference": "f73fc72b63547e42b00de7fc27432c5b7aff0285",
             "shasum": ""
         },
         "require": {
+            "ext-mbstring": "*",
+            "ext-openssl": "*",
+            "ext-soap": "*",
+            "monolog/monolog": "1.* || ~2.0",
             "php": ">=5.3.0"
         },
-        "time": "2016-10-10T12:19:37+00:00",
+        "time": "2020-01-03T12:41:19+00:00",
         "type": "library",
-        "extra": {
-            "branch-alias": {
-                "dev-master": "1.0.x-dev"
-            }
-        },
         "installation-source": "dist",
         "autoload": {
             "psr-4": {
-                "Psr\\Log\\": "Psr/Log/"
+                "Payline\\": "src/Payline"
             }
         },
         "notification-url": "https://packagist.org/downloads/",
         "license": [
-            "MIT"
+            "LGPL-3.0"
         ],
         "authors": [
             {
-                "name": "PHP-FIG",
-                "homepage": "http://www.php-fig.org/"
+                "name": "Fabien SUAREZ",
+                "email": "fabien.suarez@payline.com",
+                "homepage": "http://www.payline.com"
             }
         ],
-        "description": "Common interface for logging libraries",
-        "homepage": "https://github.com/php-fig/log",
+        "description": "Payline library for PHP",
         "keywords": [
-            "log",
-            "psr",
-            "psr-3"
+            "Monext",
+            "Payline",
+            "payment"
         ]
     },
     {
         "name": "monolog/monolog",
-        "version": "1.23.0",
-        "version_normalized": "1.23.0.0",
+        "version": "1.25.3",
+        "version_normalized": "1.25.3.0",
         "source": {
             "type": "git",
             "url": "https://github.com/Seldaek/monolog.git",
-            "reference": "fd8c787753b3a2ad11bc60c063cff1358a32a3b4"
+            "reference": "fa82921994db851a8becaf3787a9e73c5976b6f1"
         },
         "dist": {
             "type": "zip",
-            "url": "https://api.github.com/repos/Seldaek/monolog/zipball/fd8c787753b3a2ad11bc60c063cff1358a32a3b4",
-            "reference": "fd8c787753b3a2ad11bc60c063cff1358a32a3b4",
+            "url": "https://api.github.com/repos/Seldaek/monolog/zipball/fa82921994db851a8becaf3787a9e73c5976b6f1",
+            "reference": "fa82921994db851a8becaf3787a9e73c5976b6f1",
             "shasum": ""
         },
         "require": {
@@ -96,7 +95,7 @@
             "ruflin/elastica": "Allow sending log messages to an Elastic Search server",
             "sentry/sentry": "Allow sending log messages to a Sentry server"
         },
-        "time": "2017-06-19T01:22:40+00:00",
+        "time": "2019-12-20T14:15:16+00:00",
         "type": "library",
         "extra": {
             "branch-alias": {
@@ -129,48 +128,52 @@
         ]
     },
     {
-        "name": "monext/payline-sdk",
-        "version": "4.52.1",
-        "version_normalized": "4.52.1.0",
+        "name": "psr/log",
+        "version": "1.1.2",
+        "version_normalized": "1.1.2.0",
         "source": {
             "type": "git",
-            "url": "https://github.com/PaylineByMonext/payline-php-sdk.git",
-            "reference": "25a04234f2a826c572e104834f6f851606137ff9"
+            "url": "https://github.com/php-fig/log.git",
+            "reference": "446d54b4cb6bf489fc9d75f55843658e6f25d801"
         },
         "dist": {
             "type": "zip",
-            "url": "https://api.github.com/repos/PaylineByMonext/payline-php-sdk/zipball/25a04234f2a826c572e104834f6f851606137ff9",
-            "reference": "25a04234f2a826c572e104834f6f851606137ff9",
+            "url": "https://api.github.com/repos/php-fig/log/zipball/446d54b4cb6bf489fc9d75f55843658e6f25d801",
+            "reference": "446d54b4cb6bf489fc9d75f55843658e6f25d801",
             "shasum": ""
         },
         "require": {
-            "monolog/monolog": "1.*",
             "php": ">=5.3.0"
         },
-        "time": "2017-10-24T09:55:59+00:00",
+        "time": "2019-11-01T11:05:21+00:00",
         "type": "library",
+        "extra": {
+            "branch-alias": {
+                "dev-master": "1.1.x-dev"
+            }
+        },
         "installation-source": "dist",
         "autoload": {
             "psr-4": {
-                "Payline\\": "src/Payline"
+                "Psr\\Log\\": "Psr/Log/"
             }
         },
         "notification-url": "https://packagist.org/downloads/",
         "license": [
-            "LGPL-3.0"
+            "MIT"
         ],
         "authors": [
             {
-                "name": "Fabien SUAREZ",
-                "email": "fabien.suarez@payline.com",
-                "homepage": "http://www.payline.com"
+                "name": "PHP-FIG",
+                "homepage": "http://www.php-fig.org/"
             }
         ],
-        "description": "Payline library for PHP",
+        "description": "Common interface for logging libraries",
+        "homepage": "https://github.com/php-fig/log",
         "keywords": [
-            "Monext",
-            "Payline",
-            "payment"
+            "log",
+            "psr",
+            "psr-3"
         ]
     }
 ]

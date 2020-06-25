@@ -866,6 +866,9 @@ class PaylinePaymentGateway
             // Do re-autorization
             $params['payment']['action'] = 101;
             $params['order'] = $transaction['order'];
+            // Format Order Date for Payline dd/mm/YYYY h:m
+            $dt = new DateTime($params['order']['date']);
+            $params['order']['date'] = $dt->format('d/m/Y h:m');
             $result = $instance->doReAuthorization($params);
         } else {
             // Do capture
