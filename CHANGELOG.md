@@ -1,3 +1,10 @@
+2.2.7
+===
+<h2>released on 2020-08-14</h2>
+<ul>
+<li>Fix translation.</li>
+</ul>
+
 2.2.6
 ===
 <h2>released on 2020-03-06</h2>
