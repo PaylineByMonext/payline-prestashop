@@ -20,11 +20,5 @@
 				<p>{l s='More information on www.payline.com.' mod='payline'}</p>
 			</div>
 		</div>
-		<div class="row">
-			<div class="col-xs-12 well">
-				<h3>{l s='Need help ?' mod='payline'}</h3>
-				<p>{l s='Find our documentation or contact our team through support.payline.com.' mod='payline'}</p>
-			</div>
-		</div>
 	</div>
 </div>
