@@ -1,4 +1,30 @@
-* 4.52 (2017-10-16)
+* 4.59 (2019-07-28)
+  * wsdl upgrade
+  * new threeDSInfo parameter for manageWebWallet and doWebPayment
+  * new browser in threeDSInfo
+  * new sdk in threeDSInfo
+  * new streetNumber, addressCreateDate and email in address
+  * new resultContainer and authenticationResult in Authentication3DSecure
+  * new buyerExtended, merchantAuthentication and loyaltyMemberType in buyer
+  * new discountAmount, otaPackageType, otaDestinationCountry, bookingReference, orderDetail, orderExtended and orderOTA in order
+  * new seller and sellerType in OrderDetail
+  * new cumulatedAmount in payment
+  * new billingBank in recurring
+
+* 4.54 & 4.55 (2018-06-27)
+  * new asynchronousRetryTimeout parameter for doAuthorization and doWebPayment (4.55)
+  * new miscData parameter for isRegistered (4.54)
+  
+* 4.53 (2018-01-10)
+  * new deliveryCharge attribute in order object
+  * new registrationToken attribute in payment object
+  * new object subMerchant
+  * new method isRegistered
+  * new subMerchant parameter for doAuthorization, doWebPayment, doCredit, doDebit, doImmediateWalletPayment, doScheduledWalletPayment
+  * new miscData parameter for doWebPayment
+  * new returnUrl parameter for verifyEnrollment
+ 
+ * 4.52 (2017-10-16)
   * new avs child node in transaction object
   
 * 4.51 (2017-08-11)

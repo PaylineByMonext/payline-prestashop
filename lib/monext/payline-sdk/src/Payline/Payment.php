@@ -29,4 +29,8 @@ class Payment
     public $softDescriptor;
 
     public $cardBrand;
+
+    public $registrationToken;
+
+    public $cumulatedAmount;
 }

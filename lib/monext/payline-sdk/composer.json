@@ -16,7 +16,10 @@
 	],
 	"require" : {
 		"php" : ">=5.3.0",
-		"monolog/monolog" : "1.*"
+		"ext-soap": "*",
+		"monolog/monolog" : "1.* || ~2.0",
+      	"ext-openssl": "*",
+		"ext-mbstring": "*"
 	},
 	"support" : {
 		"email" : "support@payline.com",
@@ -26,6 +29,6 @@
 		"psr-4" : {
 			"Payline\\" : "src/Payline"
 		}
-		 
+
 	}
 }

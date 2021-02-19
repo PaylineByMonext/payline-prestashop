@@ -1,3 +1,26 @@
+2.2.7
+===
+<h2>released on 2020-08-14</h2>
+<ul>
+<li>Fix translation.</li>
+</ul>
+
+2.2.6
+===
+<h2>released on 2020-03-06</h2>
+<ul>
+<li>Update properly order.total_paid_real on partial refund.</li>
+<li>Correct french translation backoffice "alternative contracts"</li>
+<li>Backoffice : delete need help block</li>
+</ul>
+
+2.2.5
+===
+<h2>released on 2019-04-04</h2>
+<ul>
+<li>Use PaylineSDK v4.59</li>
+</ul>
+
 2.2.4
 ===
 <h2>released on 2018-11-12</h2>
